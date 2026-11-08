@@ -8,7 +8,7 @@ import json, sys
 
 from chains import CACHE, TODAY, pricefull_for, records
 
-COLS = ["itemcode", "itemname", "itemprice", "quantity", "unitofmeasure", "bisweighted", "unitofmeasureprice", "manufacturername"]
+COLS = ["itemcode", "itemname", "itemprice", "quantity", "unitofmeasure", "bisweighted", "unitofmeasureprice", "manufacturename"]
 
 
 def tsv_path(chain, store_id):

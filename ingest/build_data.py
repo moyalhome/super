@@ -9,7 +9,7 @@ Reads stores_nearby.json and the TSV files for today from the cache dir (see cha
   weighted.json  {"w": [[ [name, agorot_per_kg], ... ] per store index]}
   meta.json      date, per-store item counts, stores that failed or had no file today
 """
-import json, math, sys
+import collections, json, math, re, sys
 from pathlib import Path
 
 from chains import CACHE, TODAY
@@ -35,8 +35,24 @@ def load_tsv(path):
             price = float(f[2])
         except ValueError:
             continue
-        rows.append({"code": f[0], "name": f[1], "price": price, "weighted": f[5] == "1"})
+        rows.append({"code": f[0], "name": f[1], "price": price, "weighted": f[5] == "1", "mfr": f[7]})
     return rows
+
+
+PLACEHOLDERS = {"", "---", "--", "-", ",", "לא ידוע", "כללי", "אחר", "לא מוגדר", "ללא", "na", "n/a",
+                "קריות זול"}  # the last one is a store label (Freshmarket), not a manufacturer
+DROP_WORDS = {"בעמ", "תעשיות", "תעשיית", "תעשיה", "מזון", "השקעות", "גרופ", "בריאות", "שיווק", "ושות", "אגשח",
+              "ישראל", "סחר", "מסחר", "יבוא", "וניהול"}
+
+
+def clean_brand(raw):
+    """'אסם תעשיות מזון בע"מ' and 'אסם השקעות בע"מ' both become 'אסם'; placeholders become ''."""
+    s = re.sub(r"[\"'׳״`]", "", raw or "").strip()
+    if s.lower() in PLACEHOLDERS:
+        return ""
+    words = [w for w in s.split() if w not in DROP_WORDS and not re.fullmatch(r"\(?\d{4}\)?", w)]
+    out = " ".join(words).strip()
+    return "" if out.lower() in PLACEHOLDERS else out
 
 
 def main():
@@ -66,6 +82,7 @@ def main():
         sys.exit("no price files found for today: nothing to build")
 
     prices, names, weighted = {}, {}, []
+    votes = collections.defaultdict(collections.Counter)  # barcode -> manufacturer -> number of stores naming it
     for i, rows in enumerate(tables):
         w = []
         for r in rows:
@@ -76,7 +93,12 @@ def main():
                 prices.setdefault(r["code"], [None] * len(stores))[i] = cents
                 if len(r["name"]) > len(names.get(r["code"], "")):
                     names[r["code"]] = r["name"]
+                b = clean_brand(r["mfr"])
+                if b:
+                    votes[r["code"]][b] += 1
         weighted.append(w)
+    # the brand most stores agree on; on a tie the longer (more specific) name
+    brands = {c: max(v.items(), key=lambda kv: (kv[1], len(kv[0])))[0] for c, v in votes.items()}
 
     def dump(name, obj):
         (out / name).write_text(json.dumps(obj, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
@@ -85,8 +107,10 @@ def main():
     dump("prices.json", {"p": prices})
     dump("names.json", names)
     dump("weighted.json", {"w": weighted})
+    dump("brands.json", brands)
     dump("meta.json", {"date": f"{TODAY[:4]}-{TODAY[4:6]}-{TODAY[6:]}", "stores": len(stores), "barcodes": len(prices),
                        "missing": missing})
+    print(f"brand known for {len(brands)} of {len(prices)} barcodes")
     print(f"built {len(stores)} stores, {len(prices)} barcodes, {sum(len(w) for w in weighted)} weighted rows; "
           f"{len(missing)} stores had no file -> {out}")
     for m in missing:

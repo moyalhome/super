@@ -1,4 +1,4 @@
-import type { Data, Item } from "./types";
+import type { Data, HistoryEntry, Item } from "./types";
 
 const SB_URL = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.replace(/\/$/, "");
 const SB_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
@@ -8,6 +8,7 @@ const LISTS_KEY = "super.lists";
 const NAME_KEY = "super.name";
 const CLIENT_KEY = "super.client";
 const KV_KEY = "super.kv";
+const HISTORY_KEY = "super.history";
 
 export const remoteConfigured = Boolean(SB_URL && SB_KEY);
 
@@ -71,6 +72,9 @@ export interface Backend {
   /** household-wide settings: remembered departments and their order */
   kvAll(): Promise<Record<string, unknown>>;
   kvSet(key: string, value: unknown): Promise<void>;
+  history(): Promise<HistoryEntry[]>;
+  /** count a purchase (an item was put in the cart) */
+  bump(item: Item): Promise<void>;
 }
 
 async function rpc<T>(fn: string, args: Record<string, unknown>, keepalive = false): Promise<T> {
@@ -103,6 +107,8 @@ export function remoteBackend(code: string): Backend {
     leave: async (client) => void (await rpc("presence_leave", { p_code: code, p_client: client }, true)),
     kvAll: async () => (await rpc<Record<string, unknown>>("kv_get_all", { p_code: code })) ?? {},
     kvSet: async (key, value) => void (await rpc("kv_set", { p_code: code, p_key: key, p_value: value })),
+    history: async () => (await rpc<HistoryEntry[]>("history_get", { p_code: code })) ?? [],
+    bump: async (item) => void (await rpc("history_bump", { p_code: code, p_item: item })),
   };
 }
 
@@ -112,6 +118,7 @@ export function localBackend(): Backend {
   const write = (l: Item[]) => store.set(LOCAL_KEY, JSON.stringify(l));
   const readLists = (): SavedList[] => { try { return JSON.parse(store.get(LISTS_KEY) ?? "[]"); } catch { return []; } };
   const writeLists = (l: SavedList[]) => store.set(LISTS_KEY, JSON.stringify(l));
+  const readHistory = (): HistoryEntry[] => { try { return JSON.parse(store.get(HISTORY_KEY) ?? "[]"); } catch { return []; } };
   return {
     shared: false,
     list: async () => read(),
@@ -132,6 +139,17 @@ export function localBackend(): Backend {
       try { cur = JSON.parse(store.get(KV_KEY) ?? "{}"); } catch { /* start fresh */ }
       store.set(KV_KEY, JSON.stringify({ ...cur, [key]: value }));
     },
+    history: async () => readHistory().sort((a, b) => b.times - a.times || b.lastAt.localeCompare(a.lastAt)),
+    bump: async (item) => {
+      const key = item.kind === "barcode" ? `b:${item.barcode}` : item.kind === "weighted" ? `w:${(item.keyword ?? item.text).toLowerCase().trim()}` : `t:${item.text.toLowerCase().trim()}`;
+      const all = readHistory();
+      const old = all.find((h) => h.key === key);
+      const entry: HistoryEntry = {
+        key, text: item.text, kind: item.kind, barcode: item.barcode, keyword: item.keyword, dept: item.dept,
+        qty: item.qty, times: (old?.times ?? 0) + 1, lastAt: new Date().toISOString(),
+      };
+      store.set(HISTORY_KEY, JSON.stringify([...all.filter((h) => h.key !== key), entry].slice(-200)));
+    },
   };
 }
 
@@ -143,12 +161,13 @@ const j = async <T,>(f: string): Promise<T> => {
 };
 
 export async function loadData(): Promise<Data> {
-  const [stores, prices, names, weighted, meta] = await Promise.all([
+  const [stores, prices, names, weighted, meta, brands] = await Promise.all([
     j<Data["stores"]>("stores.json"),
     j<{ p: Data["prices"] }>("prices.json"),
     j<Data["names"]>("names.json"),
     j<{ w: Data["weighted"] }>("weighted.json"),
     j<Data["meta"]>("meta.json"),
+    j<Data["brands"]>("brands.json").catch(() => ({} as Data["brands"])),
   ]);
-  return { stores, prices: prices.p, names, weighted: weighted.w, meta };
+  return { stores, prices: prices.p, names, weighted: weighted.w, meta, brands };
 }

@@ -7,7 +7,9 @@ import { compare, shekel, type Comparison, type StoreResult } from "./compare";
 import { DEFAULT_DEPTS, OTHER, deptFor, deptKey, deptOptions, deptOrder, groupByDept } from "./departments";
 import { buildIndex, findBarcode, search, type Suggestion } from "./search";
 import Scanner, { type ScanResult } from "./Scanner";
-import type { Data, Item } from "./types";
+import Picker from "./Picker";
+import { ProductImg } from "./images";
+import type { Data, HistoryEntry, Item } from "./types";
 
 type Status = "loading" | "ok" | "offline" | "locked";
 type Tab = "list" | "compare" | "saved";
@@ -29,6 +31,7 @@ export default function App() {
   const [renaming, setRenaming] = useState(false);
   const [online, setOnline] = useState<Online[]>([]);
   const [kv, setKv] = useState<Record<string, unknown>>({});
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
   const pending = useRef(0);
 
   useEffect(() => {
@@ -75,6 +78,16 @@ export default function App() {
     return () => { clearInterval(t); document.removeEventListener("visibilitychange", load); };
   }, [backend, handleError]);
 
+  // what the household bought before, for one-tap re-adding
+  const refreshHistory = useCallback(() => {
+    if (backend) backend.history().then(setHistory).catch(handleError);
+  }, [backend, handleError]);
+  useEffect(() => {
+    refreshHistory();
+    const t = setInterval(() => { if (!document.hidden) refreshHistory(); }, 60000);
+    return () => clearInterval(t);
+  }, [refreshHistory]);
+
   // "I am here" heartbeat; the server answers with everyone seen in the last 45 seconds
   useEffect(() => {
     if (!backend?.shared || !name) return;
@@ -116,6 +129,12 @@ export default function App() {
   const saveOrder = (order: string[]) => {
     setKv((p) => ({ ...p, deptOrder: order }));
     backend!.kvSet("deptOrder", order).catch(handleError);
+  };
+  // putting an item in the cart counts as a purchase (this feeds "bought before")
+  const toggleChecked = (it: Item) => {
+    const becoming = !it.checked;
+    update({ ...it, checked: becoming, checkedBy: becoming ? name : undefined });
+    if (becoming) backend!.bump({ ...it, dept: it.dept ?? deptFor(it, kv) }).then(refreshHistory).catch(handleError);
   };
 
   const saveCurrent = async (name: string): Promise<string> => {
@@ -172,7 +191,7 @@ export default function App() {
         {status === "offline" && <p className="banner warn" role="alert">אין חיבור לשרת. נסו שוב בעוד רגע.</p>}
         {status === "locked" && <p className="banner warn" role="alert">יותר מדי ניסיונות כושלים לקוד, והגישה נעולה זמנית (עד שעה). נסו שוב מאוחר יותר.</p>}
         {dataError && <p className="banner warn" role="alert">לא הצלחתי לטעון את המחירים: {dataError}</p>}
-        {tab === "list" && <ListView items={items} data={data} name={name} kv={kv} setDept={setDept} add={add} update={update} remove={remove} />}
+        {tab === "list" && <ListView items={items} data={data} name={name} kv={kv} history={history} toggleChecked={toggleChecked} setDept={setDept} add={add} update={update} remove={remove} />}
         {tab === "compare" && (data ? <CompareView items={items} data={data} /> : <p className="muted center">טוען מחירים…</p>)}
         {tab === "saved" && (
           <SavedView lists={lists} hasItems={items.length > 0} order={deptOrder(kv)} onOrder={saveOrder} onSave={saveCurrent} onLoad={loadSaved} onDelete={deleteSaved} />
@@ -218,18 +237,21 @@ interface ListProps {
   data: Data | null;
   name: string;
   kv: Record<string, unknown>;
+  history: HistoryEntry[];
+  toggleChecked: (i: Item) => void;
   setDept: (i: Item, dept: string) => void;
   add: (i: Item) => void;
   update: (i: Item) => void;
   remove: (id: string) => void;
 }
 
-function ListView({ items, data, name, kv, setDept, add, update, remove }: ListProps) {
+function ListView({ items, data, name, kv, history, toggleChecked, setDept, add, update, remove }: ListProps) {
   const [q, setQ] = useState("");
   const index = useMemo(() => (data ? buildIndex(data) : null), [data]);
   const sugg = useMemo(() => (index ? search(index, q) : []), [index, q]);
   const [editing, setEditing] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
+  const [browsing, setBrowsing] = useState(false);
 
   const base = { qty: 1, checked: false, exclude: "", addedBy: name, createdAt: new Date().toISOString() };
   const addSug = (s: Suggestion) => {
@@ -259,6 +281,29 @@ function ListView({ items, data, name, kv, setDept, add, update, remove }: ListP
   };
   const addNamed = (raw: string, name: string) => add({ ...base, id: uid(), text: `${name} (ברקוד ${raw})`, kind: "free" });
 
+  const addWeightedKw = (kw: string): string => {
+    const ex = items.find((i) => i.kind === "weighted" && i.keyword === kw);
+    if (ex) {
+      update({ ...ex, checked: false, checkedBy: undefined, qty: ex.checked ? ex.qty : ex.qty + 1 });
+      return `${kw}: ${ex.checked ? "הוחזר לרשימה" : "הכמות עודכנה"}`;
+    }
+    add({ ...base, id: uid(), text: kw, kind: "weighted", keyword: kw });
+    return `נוסף: ${kw}`;
+  };
+  const sameAsHistory = (i: Item, h: HistoryEntry) =>
+    i.kind === h.kind && (h.kind === "barcode" ? i.barcode === h.barcode : h.kind === "weighted" ? i.keyword === h.keyword : i.text === h.text);
+  const addHistory = (h: HistoryEntry): string => {
+    const ex = items.find((i) => sameAsHistory(i, h));
+    if (ex) {
+      if (ex.checked) update({ ...ex, checked: false, checkedBy: undefined });
+      return `${h.text}: כבר ברשימה`;
+    }
+    add({ ...base, id: uid(), text: h.text, kind: h.kind, barcode: h.barcode ?? undefined, keyword: h.keyword ?? undefined,
+      qty: h.qty || 1, dept: h.dept ?? undefined });
+    return `נוסף: ${h.text}`;
+  };
+  const quick = history.filter((h) => !items.some((i) => sameAsHistory(i, h))).slice(0, items.length ? 8 : 12);
+
   const todo = items.filter((i) => !i.checked);
   const done = items.filter((i) => i.checked);
   const order = deptOrder(kv);
@@ -276,10 +321,11 @@ function ListView({ items, data, name, kv, setDept, add, update, remove }: ListP
       <li key={it.id} className={it.checked ? "done" : ""}>
         <div className="r">
           <label className="chk">
-            <input type="checkbox" checked={it.checked} onChange={() => update({ ...it, checked: !it.checked, checkedBy: it.checked ? undefined : name })} />
+            <input type="checkbox" checked={it.checked} onChange={() => toggleChecked(it)} />
             <span className="sr">{it.checked ? "החזרה לרשימה" : "סימון כבעגלה"}: {it.text}</span>
           </label>
           <div className="t">
+            <ProductImg code={it.kind === "barcode" ? it.barcode : undefined} dept={dep} size={40} />
             <span>{it.text}</span>
             {sub && <small>{sub}</small>}
             {(it.addedBy || it.checkedBy) && (
@@ -322,17 +368,36 @@ function ListView({ items, data, name, kv, setDept, add, update, remove }: ListP
         <input id="add" value={q} onChange={(e) => setQ(e.target.value)} placeholder="מה להוסיף? למשל חלב, מלפפון…" enterKeyHint="done" autoComplete="off" />
         <button type="submit" disabled={!q.trim()}>הוסף</button>
       </form>
-      <button type="button" className="scan" onClick={() => setScanning(true)}>📷 סריקת ברקוד של מוצר</button>
+      <div className="tools">
+        <button type="button" className="scan" onClick={() => setScanning(true)}>📷 סריקת ברקוד</button>
+        <button type="button" className="scan" onClick={() => setBrowsing(true)} disabled={!index}>🔎 עיון במוצרים</button>
+      </div>
       {scanning && <Scanner onCode={handleCode} onUnknownNamed={addNamed} onClose={() => setScanning(false)} />}
+      {browsing && data && index && (
+        <Picker data={data} index={index} items={items} order={order} kv={kv} history={history} initialQuery={q}
+          onAddCode={(code) => handleCode(code).message} onAddWeighted={addWeightedKw} onAddHistory={addHistory}
+          onClose={() => { setBrowsing(false); setQ(""); }} />
+      )}
       {q.trim() && (
         <ul className="sugg" aria-label="הצעות">
           {sugg.map((s, k) => (
             <li key={k}><button onClick={() => addSug(s)}><span>{s.label}</span><small>{s.stores} חנויות</small></button></li>
           ))}
+          <li><button onClick={() => setBrowsing(true)}><span>הצגת כל האפשרויות ל"{q.trim()}"</span><small>עם מחירים ויצרן</small></button></li>
           <li><button onClick={addFree}><span>הוסף "{q.trim()}" כטקסט חופשי</span><small>בלי מחיר</small></button></li>
         </ul>
       )}
-      {!items.length && !q && <p className="muted center">הרשימה ריקה. הקלידו שם מוצר, או סרקו ברקוד.</p>}
+      {!q.trim() && quick.length > 0 && (
+        <section className="quick" aria-label="קניתם בעבר">
+          <h2 className="h">קניתם בעבר: הוספה בלחיצה</h2>
+          <div className="chips">
+            {quick.map((h) => (
+              <button key={h.key} type="button" onClick={() => addHistory(h)} aria-label={`הוספה: ${h.text}`}>+ {h.text}</button>
+            ))}
+          </div>
+        </section>
+      )}
+      {!items.length && !q && <p className="muted center">הרשימה ריקה. הקלידו שם מוצר, סרקו ברקוד או עיינו במוצרים.</p>}
       {groupByDept(todo, order, deptOf).map(([dept, list]) => (
         <div key={dept} className="dept">
           <h2 className={`dh${dept === OTHER ? " other" : ""}`}>{dept} <span>({list.length})</span></h2>

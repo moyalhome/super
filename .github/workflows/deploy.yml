@@ -43,8 +43,8 @@ jobs:
             .cache/*.tsv
             .cache/stores-*.json
             .cache/cities-*.json
-          key: prices-${{ steps.day.outputs.d }}
-          restore-keys: prices-
+          key: prices2-${{ steps.day.outputs.d }}
+          restore-keys: prices2-
 
       - name: Prepare cache dir
         run: |
@@ -65,13 +65,13 @@ jobs:
         run: |
           echo "::warning::Price download failed, reusing the previously published data"
           mkdir -p web/public/data
-          for f in stores prices names weighted meta; do
-            curl -fsS "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/data/$f.json" -o "web/public/data/$f.json"
+          for f in stores prices names weighted brands meta; do
+            curl -fsS "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/data/$f.json" -o "web/public/data/$f.json" || { [ "$f" = brands ] && echo "{}" > "web/public/data/$f.json"; }
           done
 
       - name: Check the data files exist
         run: |
-          for f in stores prices names weighted meta; do test -s "web/public/data/$f.json" || { echo "::error::missing web/public/data/$f.json"; exit 1; }; done
+          for f in stores prices names weighted brands meta; do test -s "web/public/data/$f.json" || { echo "::error::missing web/public/data/$f.json"; exit 1; }; done
           cat web/public/data/meta.json | head -c 300; echo
 
       - uses: actions/setup-node@v4

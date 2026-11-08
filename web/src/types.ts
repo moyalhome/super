@@ -41,7 +41,22 @@ export interface Data {
   /** barcode -> price in agorot per store index (null = not sold) */
   prices: Record<string, (number | null)[]>;
   names: Record<string, string>;
+  /** barcode -> manufacturer (cleaned), when the stores name one */
+  brands: Record<string, string>;
   /** per store index: [name, agorot per kg] */
   weighted: [string, number][][];
   meta: Meta;
+}
+
+/** A product the household bought before (counted when it was put in the cart). */
+export interface HistoryEntry {
+  key: string;
+  text: string;
+  kind: Kind;
+  barcode?: string | null;
+  keyword?: string | null;
+  dept?: string | null;
+  qty: number;
+  times: number;
+  lastAt: string;
 }
