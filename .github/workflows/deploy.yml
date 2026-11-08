@@ -96,7 +96,11 @@ jobs:
         env:
           SB_URL: ${{ vars.SUPABASE_URL }}
           SB_KEY: ${{ vars.SUPABASE_ANON_KEY }}
-        run: curl -fsS -X POST "$SB_URL/rest/v1/rpc/ping" -H "apikey: $SB_KEY" -H "Authorization: Bearer $SB_KEY" -H "Content-Type: application/json" -d '{}' > /dev/null && echo "supabase ping ok"
+        run: |
+          curl -fsS -X POST "$SB_URL/rest/v1/rpc/ping" \
+            -H "apikey: $SB_KEY" -H "Authorization: Bearer $SB_KEY" \
+            -H "Content-Type: application/json" -d '{}' > /dev/null
+          echo "supabase ping ok"
 
       - uses: actions/upload-pages-artifact@v3
         with:
