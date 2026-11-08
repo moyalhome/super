@@ -58,6 +58,7 @@ jobs:
         env:
           HOME_ADDRESS: ${{ secrets.HOME_ADDRESS }}
           RADIUS_KM: "4"
+          SKIP_CHAINS: carrefour # its portal blocks GitHub's servers, and it has no branch within the radius
           PUBLISHED_BASE: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
         run: python ingest/run_pipeline.py web/public/data
 

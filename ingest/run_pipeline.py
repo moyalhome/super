@@ -13,6 +13,8 @@ import requests
 
 HERE = Path(__file__).parent
 PY = sys.executable
+sys.path.insert(0, str(HERE))
+from chains import all_chain_keys  # noqa: E402
 
 
 def run(args, label, quiet=False):
@@ -37,10 +39,13 @@ def main():
     if not address:
         sys.exit("HOME_ADDRESS is not set")
     radius = os.environ.get("RADIUS_KM", "4")
+    # chains to leave out, e.g. one whose portal blocks GitHub's servers (each retry would waste minutes on it)
+    skip = {c for c in os.environ.get("SKIP_CHAINS", "").split(",") if c}
+    chains = ",".join(c for c in all_chain_keys() if c not in skip)
 
     # 1. stores: retry while a portal was skipped ("warning: skipping <chain>")
     for attempt in range(1, 4):
-        r = run(["find_stores.py", address, "--radius", radius], f"find stores (attempt {attempt})", quiet=True)
+        r = run(["find_stores.py", address, "--radius", radius, "--chains", chains], f"find stores (attempt {attempt})", quiet=True)
         if r.returncode != 0:
             sys.exit("find_stores failed (details hidden: they may contain the home address)")
         if "warning: skipping" not in r.stderr:
