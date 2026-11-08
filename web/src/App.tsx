@@ -3,7 +3,7 @@ import {
   BadCode, Locked, canon, clearCode, clientId, getName, loadData, localBackend, readCode, remoteBackend, remoteConfigured,
   saveCode, setName as storeName, uid, type Backend, type Online, type SavedItem, type SavedList,
 } from "./api";
-import { compare, shekel, type Comparison, type StoreResult } from "./compare";
+import { compare, priceItem, shekel, type Comparison, type StoreResult } from "./compare";
 import { DEFAULT_DEPTS, OTHER, deptFor, deptKey, deptOptions, deptOrder, groupByDept } from "./departments";
 import { buildIndex, findBarcode, search, type Suggestion } from "./search";
 import Scanner, { type ScanResult } from "./Scanner";
@@ -252,6 +252,19 @@ function ListView({ items, data, name, kv, history, toggleChecked, setDept, add,
   const [editing, setEditing] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
   const [browsing, setBrowsing] = useState(false);
+  // prices in the list are shown for one store: the cheapest one that has the whole list, unless the user picks another
+  const [refKey, setRefKey] = useState<string>(() => { try { return localStorage.getItem("super.ref") ?? "auto"; } catch { return "auto"; } });
+  const priceCtx = useMemo(() => {
+    if (!data || !items.some((i) => i.kind !== "free")) return null;
+    const auto = compare(data, items.map((i) => ({ ...i, checked: false })), 2).winner?.index ?? 0;
+    const picked = refKey === "auto" ? -1 : data.stores.findIndex((s) => s.key === refKey);
+    const idx = picked >= 0 ? picked : auto;
+    return { idx, auto, store: data.stores[idx], autoStore: data.stores[auto] };
+  }, [data, items, refKey]);
+  const chooseRef = (key: string) => {
+    setRefKey(key);
+    try { localStorage.setItem("super.ref", key); } catch { /* private mode */ }
+  };
 
   const base = { qty: 1, checked: false, exclude: "", addedBy: name, createdAt: new Date().toISOString() };
   const addSug = (s: Suggestion) => {
@@ -308,9 +321,16 @@ function ListView({ items, data, name, kv, history, toggleChecked, setDept, add,
   const done = items.filter((i) => i.checked);
   const order = deptOrder(kv);
   const deptOf = (i: Item) => i.dept ?? deptFor(i, kv);
+  const priceOf = (it: Item) => (priceCtx && data && it.kind !== "free" ? priceItem(data, priceCtx.idx, it) : null);
+  const sumOf = (list: Item[]) => list.reduce((s, i) => s + (priceOf(i)?.price ?? 0), 0);
+  const sumTodo = sumOf(todo);
+  const sumDone = sumOf(done);
+  const noPrice = items.filter((i) => i.kind !== "free" && priceOf(i)?.price == null).length;
 
   const row = (it: Item) => {
     const dep = deptOf(it);
+    const pr = priceOf(it);
+    const per = it.kind === "weighted" ? 'לק"ג' : "ליח'";
     const step = it.kind === "weighted" ? 0.5 : 1;
     const unit = it.kind === "weighted" ? 'ק"ג' : "יח'";
     const sub =
@@ -327,6 +347,13 @@ function ListView({ items, data, name, kv, history, toggleChecked, setDept, add,
           <div className="t">
             <ProductImg code={it.kind === "barcode" ? it.barcode : undefined} dept={dep} size={40} />
             <span>{it.text}</span>
+            {pr && (
+              <span className={`price${pr.price == null ? " none" : ""}`}>
+                {pr.price == null
+                  ? "לא נמכר בחנות הזו"
+                  : <>{it.kind === "weighted" ? "≈ " : ""}{shekel(pr.price)}{it.qty !== 1 && pr.unit != null ? <small> ({shekel(pr.unit)} {per})</small> : null}</>}
+              </span>
+            )}
             {sub && <small>{sub}</small>}
             {(it.addedBy || it.checkedBy) && (
               <small className="by">
@@ -387,6 +414,22 @@ function ListView({ items, data, name, kv, history, toggleChecked, setDept, add,
           <li><button onClick={addFree}><span>הוסף "{q.trim()}" כטקסט חופשי</span><small>בלי מחיר</small></button></li>
         </ul>
       )}
+      {priceCtx && data && (
+        <section className="totals" aria-label="סיכום מחירים">
+          <div><span>ברשימה</span><b>{shekel(sumTodo)}</b></div>
+          <div><span>בעגלה</span><b>{shekel(sumDone)}</b></div>
+          <div><span>סה"כ</span><b>{shekel(sumTodo + sumDone)}</b></div>
+          <label className="ref">
+            <span>מחירים לפי:</span>
+            <select value={refKey} onChange={(e) => chooseRef(e.target.value)}>
+              <option value="auto">הזולה לכל הרשימה: {priceCtx.autoStore.name}</option>
+              {data.stores.map((s) => <option key={s.key} value={s.key}>{s.name}</option>)}
+            </select>
+          </label>
+          {noPrice > 0 && <small>{noPrice} פריטים בלי מחיר בחנות הזו, ולכן לא נכללים בסכום.</small>}
+          <small>מחירי מדף, בלי מבצעים. ≈ הוא קירוב לפי משקל.</small>
+        </section>
+      )}
       {!q.trim() && quick.length > 0 && (
         <section className="quick" aria-label="קניתם בעבר">
           <h2 className="h">קניתם בעבר: הוספה בלחיצה</h2>
@@ -407,7 +450,7 @@ function ListView({ items, data, name, kv, history, toggleChecked, setDept, add,
       ))}
       {done.length > 0 && (
         <>
-          <h2 className="h">בעגלה ({done.length})</h2>
+          <h2 className="h">בעגלה ({done.length}){priceCtx ? ` · ${shekel(sumDone)}` : ""}</h2>
           <ul className="items">{done.map(row)}</ul>
           <button className="wide" onClick={() => { if (window.confirm(`למחוק ${done.length} פריטים שבעגלה מהרשימה?`)) done.forEach((d) => remove(d.id)); }}>
             ניקוי הפריטים שבעגלה

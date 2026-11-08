@@ -151,3 +151,13 @@ footer { margin-top: 20px; text-align: center; }
 .ptoast { min-height: 28px; padding: 2px 16px; text-align: center; font-size: .95rem; color: var(--brand); font-weight: 600; }
 .pf { padding: 8px 16px calc(12px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--card); }
 .pf .done { width: 100%; border: 0; border-radius: 12px; background: var(--brand); color: var(--brand-fg); font-weight: 700; }
+
+.price { display: block; font-weight: 700; color: var(--brand); font-size: 1.02rem; }
+.price small { display: inline; color: var(--muted); font-weight: 400; }
+.price.none { color: var(--muted); font-weight: 400; font-size: .9rem; }
+.totals { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 12px 0; padding: 10px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; text-align: center; }
+.totals > div span { display: block; font-size: .85rem; color: var(--muted); }
+.totals > div b { font-size: 1.15rem; }
+.totals .ref, .totals small { grid-column: 1 / -1; }
+.totals .ref { display: flex; align-items: center; gap: 8px; text-align: start; font-size: .9rem; }
+.totals .ref select { flex: 1; min-width: 0; min-height: 44px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--fg); padding: 0 8px; }
