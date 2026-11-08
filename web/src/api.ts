@@ -29,6 +29,7 @@ export const saveCode = (c: string) => store.set(CODE_KEY, c);
 export const clearCode = () => store.del(CODE_KEY);
 
 export class BadCode extends Error {}
+export class Locked extends Error {}
 
 export interface Backend {
   shared: boolean;
@@ -43,12 +44,13 @@ async function rpc<T>(fn: string, args: Record<string, unknown>): Promise<T> {
     headers: { apikey: SB_KEY!, Authorization: `Bearer ${SB_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify(args),
   });
-  if (!r.ok) {
-    const t = await r.text();
-    if (t.includes("bad_code")) throw new BadCode();
-    throw new Error(`${fn}: ${r.status} ${t.slice(0, 120)}`);
-  }
-  return (await r.json()) as T;
+  if (!r.ok) throw new Error(`${fn}: ${r.status} ${(await r.text()).slice(0, 120)}`);
+  const body = (await r.json()) as unknown;
+  // the database answers {"error": "bad_code" | "locked"} instead of raising, so failed attempts can be counted
+  const err = body && typeof body === "object" && !Array.isArray(body) ? (body as { error?: string }).error : undefined;
+  if (err === "bad_code") throw new BadCode();
+  if (err === "locked") throw new Locked();
+  return body as T;
 }
 
 export function remoteBackend(code: string): Backend {

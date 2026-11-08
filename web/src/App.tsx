@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  BadCode, canon, clearCode, loadData, localBackend, readCode, remoteBackend, remoteConfigured, saveCode,
+  BadCode, Locked, canon, clearCode, loadData, localBackend, readCode, remoteBackend, remoteConfigured, saveCode,
   type Backend,
 } from "./api";
 import { compare, shekel, type Comparison } from "./compare";
@@ -16,7 +16,7 @@ const uid = () =>
         return (c === "x" ? r : (r & 3) | 8).toString(16);
       });
 
-type Status = "loading" | "ok" | "offline";
+type Status = "loading" | "ok" | "offline" | "locked";
 
 export default function App() {
   const [code, setCode] = useState<string | null>(() => readCode());
@@ -37,7 +37,9 @@ export default function App() {
   }, []);
 
   const handleError = useCallback((e: unknown) => {
-    if (e instanceof BadCode) { clearCode(); setCode(null); setLockError(true); } else setStatus("offline");
+    if (e instanceof BadCode) { clearCode(); setCode(null); setLockError(true); }
+    else if (e instanceof Locked) setStatus("locked");
+    else setStatus("offline");
   }, []);
 
   const refresh = useCallback(async () => {
@@ -81,6 +83,7 @@ export default function App() {
         <span className={`dot ${status}`} title={status === "ok" ? "מחובר" : status === "offline" ? "אין חיבור" : "טוען"} />
       </header>
       {!backend.shared && <p className="banner">מצב מקומי: הרשימה נשמרת רק במכשיר הזה.</p>}
+      {status === "locked" && <p className="banner warn">יותר מדי ניסיונות כושלים לקוד, והגישה נעולה זמנית (עד שעה). נסו שוב מאוחר יותר.</p>}
       {status === "offline" && <p className="banner warn">אין חיבור לשרת. השינויים יישמרו כשהחיבור יחזור.</p>}
       <nav>
         <button className={tab === "list" ? "on" : ""} onClick={() => setTab("list")}>רשימה ({open})</button>
