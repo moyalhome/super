@@ -4,7 +4,8 @@ import {
   type Backend,
 } from "./api";
 import { compare, shekel, type Comparison } from "./compare";
-import { buildIndex, search, type Suggestion } from "./search";
+import { buildIndex, findBarcode, search, type Suggestion } from "./search";
+import Scanner, { type ScanResult } from "./Scanner";
 import type { Data, Item } from "./types";
 
 const uid = () =>
@@ -124,6 +125,7 @@ function ListView({ items, data, add, update, remove }: ListProps) {
   const index = useMemo(() => (data ? buildIndex(data) : null), [data]);
   const sugg = useMemo(() => (index ? search(index, q) : []), [index, q]);
   const [editing, setEditing] = useState<string | null>(null);
+  const [scanning, setScanning] = useState(false);
 
   const base = { qty: 1, checked: false, exclude: "" };
   const addSug = (s: Suggestion) => {
@@ -137,6 +139,21 @@ function ListView({ items, data, add, update, remove }: ListProps) {
     add({ ...base, id: uid(), text: q.trim(), kind: "free" });
     setQ("");
   };
+
+  const handleCode = (raw: string): ScanResult => {
+    if (!index || !data) return { ok: false, message: "המחירים עדיין נטענים, נסו שוב" };
+    const code = findBarcode(index, raw);
+    if (!code) return { ok: false, raw, message: `ברקוד ${raw} לא נמצא בחנויות באזור` };
+    const name = data.names[code];
+    const existing = items.find((i) => i.kind === "barcode" && i.barcode === code);
+    if (existing) {
+      update({ ...existing, checked: false, qty: existing.checked ? existing.qty : existing.qty + 1 });
+      return { ok: true, message: `${name}: ${existing.checked ? "הוחזר לרשימה" : "הכמות עודכנה"}` };
+    }
+    add({ ...base, id: uid(), text: name, kind: "barcode", barcode: code });
+    return { ok: true, message: `נוסף: ${name}` };
+  };
+  const addNamed = (raw: string, name: string) => add({ ...base, id: uid(), text: `${name} (ברקוד ${raw})`, kind: "free" });
 
   const todo = items.filter((i) => !i.checked);
   const done = items.filter((i) => i.checked);
@@ -179,6 +196,8 @@ function ListView({ items, data, add, update, remove }: ListProps) {
         <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="מה להוסיף? למשל חלב, מלפפון…" enterKeyHint="done" />
         <button type="submit" disabled={!q.trim()}>הוסף</button>
       </form>
+      <button type="button" className="scan" onClick={() => setScanning(true)}>📷 סריקת ברקוד של מוצר</button>
+      {scanning && <Scanner onCode={handleCode} onUnknownNamed={addNamed} onClose={() => setScanning(false)} />}
       {q.trim() && (
         <ul className="sugg">
           {sugg.map((s, k) => (

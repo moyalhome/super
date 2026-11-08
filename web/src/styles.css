@@ -61,3 +61,14 @@ tr.miss td { color: var(--bad); }
 .foot { color: var(--muted); font-size: .8rem; margin-top: 24px; }
 footer { margin-top: 24px; text-align: center; }
 .link { border: 0; background: none; color: var(--muted); text-decoration: underline; font-size: .8rem; }
+.scan { width: 100%; margin-top: 8px; padding: 10px; border: 1px dashed var(--brand); border-radius: 10px; background: none; color: var(--brand); font-weight: 600; }
+.scanner { position: fixed; inset: 0; z-index: 10; background: #000; color: #fff; display: flex; flex-direction: column; }
+.scanner video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.scanner .frame { position: absolute; top: 18%; left: 8%; right: 8%; height: 24%; border: 3px solid var(--brand); border-radius: 14px; box-shadow: 0 0 0 100vmax rgba(0,0,0,.45); }
+.scanner .panel { position: relative; margin-top: auto; padding: 12px 16px calc(16px + env(safe-area-inset-bottom)); background: rgba(0,0,0,.72); }
+.scanner .panel p { margin: 0 0 8px; font-size: .9rem; } .scanner .err { color: #fca5a5; }
+.scanner ul { margin: 0 0 8px; max-height: 28vh; overflow: auto; }
+.scanner li { display: flex; justify-content: space-between; gap: 8px; align-items: center; padding: 6px 0; border-top: 1px solid rgba(255,255,255,.15); font-size: .9rem; }
+.scanner li.ok span::before { content: "✓ "; color: #4ade80; } .scanner li.bad span { color: #fca5a5; }
+.scanner li button { border: 1px solid #fff; background: none; color: #fff; border-radius: 8px; padding: 2px 10px; }
+.scanner .done { width: 100%; padding: 12px; border: 0; border-radius: 10px; background: var(--brand); color: var(--brand-fg); font-weight: 700; }

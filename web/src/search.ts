@@ -10,9 +10,19 @@ export interface Suggestion {
   stores: number;
 }
 
-interface Index {
+export interface Index {
   products: { code: string; name: string; n: string; count: number }[];
   weighted: { name: string; n: string; count: number }[];
+  /** barcode without leading zeros -> barcode as stored in the price files (scanners return EAN-13, some files store UPC-A) */
+  byCode: Map<string, string>;
+}
+
+const strip = (s: string) => s.replace(/^0+/, "");
+
+/** Finds the product for a scanned barcode, tolerating EAN-13 / UPC-A leading-zero differences. */
+export function findBarcode(index: Index, raw: string): string | null {
+  const digits = raw.replace(/\D/g, "");
+  return digits ? index.byCode.get(strip(digits)) ?? null : null;
 }
 
 const TWO_WORDS = new Set(["תפוח", "חזה", "פילה", "שמן", "בצל", "פלפל", "כרוב"]);
@@ -29,7 +39,8 @@ export function buildIndex(data: Data): Index {
       if (e) e.count++; else w.set(n, { name, n, count: 1 });
     }
   }
-  return { products, weighted: [...w.values()] };
+  const byCode = new Map(products.map((p) => [strip(p.code), p.code] as [string, string]));
+  return { products, weighted: [...w.values()], byCode };
 }
 
 function keywordOf(name: string): string {
