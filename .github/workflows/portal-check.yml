@@ -1,0 +1,29 @@
+name: portal-check
+
+# Manual reachability test for the Israeli supermarket price portals.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install requests
+      - name: Check each portal
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python ingest/check_portals.py | tee portal-check.txt
+      - name: Job summary
+        if: always()
+        run: |
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat portal-check.txt >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
