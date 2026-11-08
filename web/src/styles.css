@@ -105,3 +105,17 @@ footer { margin-top: 20px; text-align: center; }
 .online span::before { content: ""; display: inline-block; width: 9px; height: 9px; margin-inline-end: 6px; border-radius: 50%; background: #16a34a; }
 .online .link { min-height: 36px; }
 .by { color: var(--muted); }
+
+.dept { margin-top: 14px; }
+.dh { position: sticky; top: 0; z-index: 2; margin: 0 0 6px; padding: 8px 12px; font-size: 1rem; background: var(--bg); border-bottom: 2px solid var(--brand); color: var(--brand); text-align: start; }
+.dh span { color: var(--muted); font-weight: 400; }
+.dh.other { border-bottom-color: var(--warn); color: var(--warn); }
+.dsel { min-height: 44px; max-width: 100%; padding: 0 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--fg); font-size: .9rem; }
+.dsel.other { border-color: var(--warn); }
+.deptedit { background: var(--card); border: 1px solid var(--line); border-radius: 12px; margin-top: 16px; }
+.deptedit > :not(summary) { margin-inline: 14px; margin-bottom: 10px; }
+.deptedit ol { padding: 0; margin: 8px 14px; list-style: none; }
+.deptedit li { display: flex; align-items: center; gap: 6px; padding: 2px 0; border-top: 1px solid var(--line); }
+.deptedit li span { flex: 1; }
+.deptedit li button { width: 44px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--fg); }
+.deptedit li button:disabled { opacity: .35; }

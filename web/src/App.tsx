@@ -4,6 +4,7 @@ import {
   saveCode, setName as storeName, uid, type Backend, type Online, type SavedItem, type SavedList,
 } from "./api";
 import { compare, shekel, type Comparison, type StoreResult } from "./compare";
+import { DEFAULT_DEPTS, OTHER, deptFor, deptKey, deptOptions, deptOrder, groupByDept } from "./departments";
 import { buildIndex, findBarcode, search, type Suggestion } from "./search";
 import Scanner, { type ScanResult } from "./Scanner";
 import type { Data, Item } from "./types";
@@ -27,6 +28,7 @@ export default function App() {
   const [name, setName] = useState(getName);
   const [renaming, setRenaming] = useState(false);
   const [online, setOnline] = useState<Online[]>([]);
+  const [kv, setKv] = useState<Record<string, unknown>>({});
   const pending = useRef(0);
 
   useEffect(() => {
@@ -63,6 +65,16 @@ export default function App() {
 
   useEffect(() => { if (tab === "saved") refreshLists(); }, [tab, refreshLists]);
 
+  // remembered departments and their order: rarely change, so a slow refresh is enough
+  useEffect(() => {
+    if (!backend) return;
+    const load = () => { if (!document.hidden) backend.kvAll().then(setKv).catch(handleError); };
+    load();
+    const t = setInterval(load, 30000);
+    document.addEventListener("visibilitychange", load);
+    return () => { clearInterval(t); document.removeEventListener("visibilitychange", load); };
+  }, [backend, handleError]);
+
   // "I am here" heartbeat; the server answers with everyone seen in the last 45 seconds
   useEffect(() => {
     if (!backend?.shared || !name) return;
@@ -87,9 +99,24 @@ export default function App() {
       if (pending.current === 0) refresh();
     }
   };
-  const add = (item: Item) => mutate((l) => [...l, item], () => backend!.upsert(item));
+  const add = (item: Item) => {
+    const withDept = item.dept ? item : { ...item, dept: deptFor(item, kv) };
+    return mutate((l) => [...l, withDept], () => backend!.upsert(withDept));
+  };
   const update = (item: Item) => mutate((l) => l.map((x) => (x.id === item.id ? item : x)), () => backend!.upsert(item));
   const remove = (id: string) => mutate((l) => l.filter((x) => x.id !== id), () => backend!.remove(id));
+
+  // changing an item's department is remembered for that product, for the whole household
+  const setDept = (it: Item, dept: string) => {
+    update({ ...it, dept });
+    const key = deptKey(it);
+    setKv((p) => ({ ...p, [key]: dept }));
+    backend!.kvSet(key, dept).catch(handleError);
+  };
+  const saveOrder = (order: string[]) => {
+    setKv((p) => ({ ...p, deptOrder: order }));
+    backend!.kvSet("deptOrder", order).catch(handleError);
+  };
 
   const saveCurrent = async (name: string): Promise<string> => {
     const saved: SavedItem[] = items.map(({ id: _id, checked: _checked, addedBy: _a, checkedBy: _b, createdAt: _d, ...rest }) => rest);
@@ -145,10 +172,10 @@ export default function App() {
         {status === "offline" && <p className="banner warn" role="alert">אין חיבור לשרת. נסו שוב בעוד רגע.</p>}
         {status === "locked" && <p className="banner warn" role="alert">יותר מדי ניסיונות כושלים לקוד, והגישה נעולה זמנית (עד שעה). נסו שוב מאוחר יותר.</p>}
         {dataError && <p className="banner warn" role="alert">לא הצלחתי לטעון את המחירים: {dataError}</p>}
-        {tab === "list" && <ListView items={items} data={data} name={name} add={add} update={update} remove={remove} />}
+        {tab === "list" && <ListView items={items} data={data} name={name} kv={kv} setDept={setDept} add={add} update={update} remove={remove} />}
         {tab === "compare" && (data ? <CompareView items={items} data={data} /> : <p className="muted center">טוען מחירים…</p>)}
         {tab === "saved" && (
-          <SavedView lists={lists} hasItems={items.length > 0} onSave={saveCurrent} onLoad={loadSaved} onDelete={deleteSaved} />
+          <SavedView lists={lists} hasItems={items.length > 0} order={deptOrder(kv)} onOrder={saveOrder} onSave={saveCurrent} onLoad={loadSaved} onDelete={deleteSaved} />
         )}
         {code && remoteConfigured && (
           <footer><button className="link" onClick={() => { clearCode(); setCode(null); }}>התנתקות מהמכשיר הזה</button></footer>
@@ -190,12 +217,14 @@ interface ListProps {
   items: Item[];
   data: Data | null;
   name: string;
+  kv: Record<string, unknown>;
+  setDept: (i: Item, dept: string) => void;
   add: (i: Item) => void;
   update: (i: Item) => void;
   remove: (id: string) => void;
 }
 
-function ListView({ items, data, name, add, update, remove }: ListProps) {
+function ListView({ items, data, name, kv, setDept, add, update, remove }: ListProps) {
   const [q, setQ] = useState("");
   const index = useMemo(() => (data ? buildIndex(data) : null), [data]);
   const sugg = useMemo(() => (index ? search(index, q) : []), [index, q]);
@@ -232,8 +261,11 @@ function ListView({ items, data, name, add, update, remove }: ListProps) {
 
   const todo = items.filter((i) => !i.checked);
   const done = items.filter((i) => i.checked);
+  const order = deptOrder(kv);
+  const deptOf = (i: Item) => i.dept ?? deptFor(i, kv);
 
   const row = (it: Item) => {
+    const dep = deptOf(it);
     const step = it.kind === "weighted" ? 0.5 : 1;
     const unit = it.kind === "weighted" ? 'ק"ג' : "יח'";
     const sub =
@@ -264,6 +296,10 @@ function ListView({ items, data, name, add, update, remove }: ListProps) {
               <span aria-live="polite">{it.qty} {unit}</span>
               <button onClick={() => update({ ...it, qty: +(it.qty + step).toFixed(1) })} aria-label={`הגדלת כמות: ${it.text}`}>+</button>
             </div>
+            <select className={`dsel${dep === OTHER ? " other" : ""}`} value={dep} aria-label={`מחלקה: ${it.text}`}
+              onChange={(e) => setDept(it, e.target.value)}>
+              {deptOptions(order, dep).map((d) => <option key={d} value={d}>{d}</option>)}
+            </select>
             {it.kind === "weighted" && (
               <button className="ghost" aria-expanded={editing === it.id} onClick={() => setEditing(editing === it.id ? null : it.id)}>עריכה</button>
             )}
@@ -297,7 +333,13 @@ function ListView({ items, data, name, add, update, remove }: ListProps) {
         </ul>
       )}
       {!items.length && !q && <p className="muted center">הרשימה ריקה. הקלידו שם מוצר, או סרקו ברקוד.</p>}
-      <ul className="items">{todo.map(row)}</ul>
+      {groupByDept(todo, order, deptOf).map(([dept, list]) => (
+        <div key={dept} className="dept">
+          <h2 className={`dh${dept === OTHER ? " other" : ""}`}>{dept} <span>({list.length})</span></h2>
+          {dept === OTHER && <p className="muted">לא זיהינו את המחלקה. בחרו מחלקה, והאתר יזכור אותה.</p>}
+          <ul className="items">{list.map(row)}</ul>
+        </div>
+      ))}
       {done.length > 0 && (
         <>
           <h2 className="h">בעגלה ({done.length})</h2>
@@ -429,12 +471,14 @@ function CompareView({ items, data }: { items: Item[]; data: Data }) {
 interface SavedProps {
   lists: SavedList[];
   hasItems: boolean;
+  order: string[];
+  onOrder: (o: string[]) => void;
   onSave: (name: string) => Promise<string>;
   onLoad: (l: SavedList) => string;
   onDelete: (id: string) => Promise<void>;
 }
 
-function SavedView({ lists, hasItems, onSave, onLoad, onDelete }: SavedProps) {
+function SavedView({ lists, hasItems, order, onOrder, onSave, onLoad, onDelete }: SavedProps) {
   const [name, setName] = useState("");
   const [msg, setMsg] = useState("");
   const submit = async (e: React.FormEvent) => {
@@ -460,6 +504,8 @@ function SavedView({ lists, hasItems, onSave, onLoad, onDelete }: SavedProps) {
       </div>
       {!hasItems && <p className="muted center">הרשימה הנוכחית ריקה, אין מה לשמור.</p>}
       <p className="muted center" role="status" aria-live="polite">{msg}</p>
+
+      <DeptEditor order={order} onSave={onOrder} />
 
       <h2 className="h">הרשימות השמורות ({lists.length})</h2>
       {!lists.length && <p className="muted center">עדיין אין רשימות שמורות.</p>}
@@ -522,5 +568,45 @@ function NamePrompt({ initial, onDone, onCancel }: { initial: string; onDone: (n
       </form>
       {onCancel && <button className="link" onClick={onCancel}>ביטול</button>}
     </div>
+  );
+}
+
+function DeptEditor({ order, onSave }: { order: string[]; onSave: (o: string[]) => void }) {
+  const [nv, setNv] = useState("");
+  const move = (i: number, d: number) => {
+    const o = [...order];
+    const j = i + d;
+    if (j < 0 || j >= o.length) return;
+    [o[i], o[j]] = [o[j], o[i]];
+    onSave(o);
+  };
+  const addDept = (e: React.FormEvent) => {
+    e.preventDefault();
+    const n = nv.trim().slice(0, 40);
+    if (!n || n === OTHER || order.includes(n)) return;
+    onSave([...order, n]);
+    setNv("");
+  };
+  return (
+    <details className="deptedit">
+      <summary><b>סדר המחלקות בסופר</b><small>{order.length} מחלקות</small></summary>
+      <p className="muted">הרשימה מוצגת לפי הסדר הזה, כמו שעוברים בחנות. "{OTHER}" תמיד בסוף.</p>
+      <ol>
+        {order.map((d, i) => (
+          <li key={d}>
+            <span>{d}</span>
+            <button disabled={i === 0} onClick={() => move(i, -1)} aria-label={`הזזה למעלה: ${d}`}>↑</button>
+            <button disabled={i === order.length - 1} onClick={() => move(i, 1)} aria-label={`הזזה למטה: ${d}`}>↓</button>
+            <button onClick={() => { if (window.confirm(`להסיר את "${d}" מהסדר? פריטים בה יופיעו בסוף.`)) onSave(order.filter((x) => x !== d)); }} aria-label={`הסרה: ${d}`}>×</button>
+          </li>
+        ))}
+      </ol>
+      <form className="add" onSubmit={addDept}>
+        <label className="sr" htmlFor="newdept">מחלקה חדשה</label>
+        <input id="newdept" value={nv} onChange={(e) => setNv(e.target.value)} placeholder="מחלקה חדשה, למשל: מעדנייה" autoComplete="off" />
+        <button type="submit" disabled={!nv.trim()}>הוספה</button>
+      </form>
+      <button className="wide" onClick={() => onSave(DEFAULT_DEPTS)}>איפוס לסדר ברירת המחדל</button>
+    </details>
   );
 }

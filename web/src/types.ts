@@ -14,6 +14,8 @@ export interface Item {
   addedBy?: string;
   checkedBy?: string;
   createdAt?: string;
+  /** department (aisle) the item belongs to */
+  dept?: string;
 }
 
 export interface Store {

@@ -7,6 +7,7 @@ const LOCAL_KEY = "super.list";
 const LISTS_KEY = "super.lists";
 const NAME_KEY = "super.name";
 const CLIENT_KEY = "super.client";
+const KV_KEY = "super.kv";
 
 export const remoteConfigured = Boolean(SB_URL && SB_KEY);
 
@@ -67,6 +68,9 @@ export interface Backend {
   deleteList(id: string): Promise<void>;
   presence(client: string, name: string): Promise<Online[]>;
   leave(client: string): Promise<void>;
+  /** household-wide settings: remembered departments and their order */
+  kvAll(): Promise<Record<string, unknown>>;
+  kvSet(key: string, value: unknown): Promise<void>;
 }
 
 async function rpc<T>(fn: string, args: Record<string, unknown>, keepalive = false): Promise<T> {
@@ -97,6 +101,8 @@ export function remoteBackend(code: string): Backend {
     deleteList: async (id) => void (await rpc("saved_list_delete", { p_code: code, p_id: id })),
     presence: async (client, name) => (await rpc<Online[]>("presence_ping", { p_code: code, p_client: client, p_name: name })) ?? [],
     leave: async (client) => void (await rpc("presence_leave", { p_code: code, p_client: client }, true)),
+    kvAll: async () => (await rpc<Record<string, unknown>>("kv_get_all", { p_code: code })) ?? {},
+    kvSet: async (key, value) => void (await rpc("kv_set", { p_code: code, p_key: key, p_value: value })),
   };
 }
 
@@ -120,6 +126,12 @@ export function localBackend(): Backend {
     deleteList: async (id) => writeLists(readLists().filter((l) => l.id !== id)),
     presence: async () => [],
     leave: async () => undefined,
+    kvAll: async () => { try { return JSON.parse(store.get(KV_KEY) ?? "{}"); } catch { return {}; } },
+    kvSet: async (key, value) => {
+      let cur: Record<string, unknown> = {};
+      try { cur = JSON.parse(store.get(KV_KEY) ?? "{}"); } catch { /* start fresh */ }
+      store.set(KV_KEY, JSON.stringify({ ...cur, [key]: value }));
+    },
   };
 }
 
