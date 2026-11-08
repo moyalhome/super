@@ -13,11 +13,14 @@ const store = {
   del(k: string) { try { localStorage.removeItem(k); } catch { /* private mode */ } },
 };
 
+/** Phones capitalise, add spaces and dashes: compare only lowercase letters and digits. */
+export const canon = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+
 /** A link like https://host/super/#code=XYZ signs in once; the code is stored locally and removed from the address bar. */
 export function readCode(): string | null {
   const m = location.hash.match(/code=([^&]+)/);
   if (m) {
-    store.set(CODE_KEY, decodeURIComponent(m[1]));
+    store.set(CODE_KEY, canon(decodeURIComponent(m[1])));
     history.replaceState(null, "", location.pathname + location.search);
   }
   return store.get(CODE_KEY);

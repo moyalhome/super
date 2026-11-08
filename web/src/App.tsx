@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  BadCode, clearCode, loadData, localBackend, readCode, remoteBackend, remoteConfigured, saveCode,
+  BadCode, canon, clearCode, loadData, localBackend, readCode, remoteBackend, remoteConfigured, saveCode,
   type Backend,
 } from "./api";
 import { compare, shekel, type Comparison } from "./compare";
@@ -26,6 +26,7 @@ export default function App() {
   );
   const [items, setItems] = useState<Item[]>([]);
   const [status, setStatus] = useState<Status>("loading");
+  const [lockError, setLockError] = useState(false);
   const [data, setData] = useState<Data | null>(null);
   const [dataError, setDataError] = useState("");
   const [tab, setTab] = useState<"list" | "compare">("list");
@@ -36,7 +37,7 @@ export default function App() {
   }, []);
 
   const handleError = useCallback((e: unknown) => {
-    if (e instanceof BadCode) { clearCode(); setCode(null); } else setStatus("offline");
+    if (e instanceof BadCode) { clearCode(); setCode(null); setLockError(true); } else setStatus("offline");
   }, []);
 
   const refresh = useCallback(async () => {
@@ -68,7 +69,9 @@ export default function App() {
   const update = (item: Item) => mutate((l) => l.map((x) => (x.id === item.id ? item : x)), () => backend!.upsert(item));
   const remove = (id: string) => mutate((l) => l.filter((x) => x.id !== id), () => backend!.remove(id));
 
-  if (!backend) return <Lock onCode={(c) => { saveCode(c); setCode(c); }} />;
+  if (!backend) {
+    return <Lock error={lockError} onCode={(c) => { const k = canon(c); saveCode(k); setLockError(false); setCode(k); }} />;
+  }
 
   const open = items.filter((i) => !i.checked).length;
   return (
@@ -98,14 +101,16 @@ export default function App() {
   );
 }
 
-function Lock({ onCode }: { onCode: (c: string) => void }) {
+function Lock({ onCode, error }: { onCode: (c: string) => void; error: boolean }) {
   const [v, setV] = useState("");
   return (
     <div className="app lock">
       <h1>רשימת קניות</h1>
       <p className="muted">הקלידו את קוד הבית, או פתחו את הקישור ששלחו לכם.</p>
-      <form onSubmit={(e) => { e.preventDefault(); if (v.trim()) onCode(v.trim()); }}>
-        <input value={v} onChange={(e) => setV(e.target.value)} placeholder="קוד הבית" dir="ltr" autoComplete="off" autoFocus />
+      {error && <p className="banner warn">הקוד לא נכון. אותיות גדולות, רווחים ומקפים לא משנים, אבל כל תו אחר כן.</p>}
+      <form onSubmit={(e) => { e.preventDefault(); if (v.trim()) onCode(v); }}>
+        <input value={v} onChange={(e) => setV(e.target.value)} placeholder="קוד הבית" dir="ltr" autoComplete="off"
+          autoCapitalize="none" autoCorrect="off" spellCheck={false} autoFocus />
         <button type="submit">כניסה</button>
       </form>
     </div>
