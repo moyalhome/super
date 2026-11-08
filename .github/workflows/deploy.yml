@@ -69,6 +69,11 @@ jobs:
             curl -fsS "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/data/$f.json" -o "web/public/data/$f.json"
           done
 
+      - name: Check the data files exist
+        run: |
+          for f in stores prices names weighted meta; do test -s "web/public/data/$f.json" || { echo "::error::missing web/public/data/$f.json"; exit 1; }; done
+          cat web/public/data/meta.json | head -c 300; echo
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -84,6 +89,14 @@ jobs:
         run: |
           npm ci
           npm run build
+
+      - name: Keep the free Supabase project awake
+        if: ${{ vars.SUPABASE_URL != '' }}
+        continue-on-error: true
+        env:
+          SB_URL: ${{ vars.SUPABASE_URL }}
+          SB_KEY: ${{ vars.SUPABASE_ANON_KEY }}
+        run: curl -fsS -X POST "$SB_URL/rest/v1/rpc/ping" -H "apikey: $SB_KEY" -H "Authorization: Bearer $SB_KEY" -H "Content-Type: application/json" -d '{}' > /dev/null && echo "supabase ping ok"
 
       - uses: actions/upload-pages-artifact@v3
         with:

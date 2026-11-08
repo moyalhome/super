@@ -29,7 +29,8 @@ def run(args, label, quiet=False):
 
 
 def main():
-    out = sys.argv[1]
+    # absolute, because the child scripts run with this folder as their working directory
+    out = str(Path(sys.argv[1]).resolve())
     address = os.environ.get("HOME_ADDRESS")
     if not address:
         sys.exit("HOME_ADDRESS is not set")
