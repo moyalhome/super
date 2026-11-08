@@ -100,3 +100,8 @@ footer { margin-top: 20px; text-align: center; }
 .scanner li button { border: 1px solid #fff; background: none; color: #fff; border-radius: 10px; padding: 0 12px; }
 .scanner .done { width: 100%; border: 0; border-radius: 12px; background: var(--brand); color: var(--brand-fg); font-weight: 700; }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; transition: none !important; animation: none !important; } }
+
+.online { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 4px 12px; margin: 0 0 8px; font-size: .9rem; color: var(--muted); text-align: center; }
+.online span::before { content: ""; display: inline-block; width: 9px; height: 9px; margin-inline-end: 6px; border-radius: 50%; background: #16a34a; }
+.online .link { min-height: 36px; }
+.by { color: var(--muted); }

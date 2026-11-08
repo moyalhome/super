@@ -5,6 +5,8 @@ const SB_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 const CODE_KEY = "super.code";
 const LOCAL_KEY = "super.list";
 const LISTS_KEY = "super.lists";
+const NAME_KEY = "super.name";
+const CLIENT_KEY = "super.client";
 
 export const remoteConfigured = Boolean(SB_URL && SB_KEY);
 
@@ -27,6 +29,16 @@ export function readCode(): string | null {
   return store.get(CODE_KEY);
 }
 export const saveCode = (c: string) => store.set(CODE_KEY, c);
+
+/** Display name of the person using this device (the household shares one code, so names are self-declared). */
+export const getName = () => store.get(NAME_KEY) ?? "";
+export const setName = (n: string) => store.set(NAME_KEY, n.trim().slice(0, 40));
+/** Identifies this device in the "who is online" list. */
+export function clientId(): string {
+  let id = store.get(CLIENT_KEY);
+  if (!id) { id = uid(); store.set(CLIENT_KEY, id); }
+  return id;
+}
 export const clearCode = () => store.del(CODE_KEY);
 
 export class BadCode extends Error {}
@@ -41,7 +53,8 @@ export const uid = () =>
       });
 
 /** An item as stored inside a saved list: no id and never "in the cart". */
-export type SavedItem = Omit<Item, "id" | "checked">;
+export type SavedItem = Omit<Item, "id" | "checked" | "addedBy" | "checkedBy" | "createdAt">;
+export interface Online { id: string; name: string }
 export interface SavedList { id: string; name: string; items: SavedItem[] }
 
 export interface Backend {
@@ -52,13 +65,16 @@ export interface Backend {
   lists(): Promise<SavedList[]>;
   saveList(name: string, items: SavedItem[]): Promise<void>;
   deleteList(id: string): Promise<void>;
+  presence(client: string, name: string): Promise<Online[]>;
+  leave(client: string): Promise<void>;
 }
 
-async function rpc<T>(fn: string, args: Record<string, unknown>): Promise<T> {
+async function rpc<T>(fn: string, args: Record<string, unknown>, keepalive = false): Promise<T> {
   const r = await fetch(`${SB_URL}/rest/v1/rpc/${fn}`, {
     method: "POST",
     headers: { apikey: SB_KEY!, Authorization: `Bearer ${SB_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify(args),
+    keepalive,
   });
   if (!r.ok) throw new Error(`${fn}: ${r.status} ${(await r.text()).slice(0, 120)}`);
   const body = (await r.json()) as unknown;
@@ -79,6 +95,8 @@ export function remoteBackend(code: string): Backend {
     lists: async () => (await rpc<SavedList[]>("saved_lists_get", { p_code: code })) ?? [],
     saveList: async (name, items) => void (await rpc("saved_list_save", { p_code: code, p_name: name, p_items: items })),
     deleteList: async (id) => void (await rpc("saved_list_delete", { p_code: code, p_id: id })),
+    presence: async (client, name) => (await rpc<Online[]>("presence_ping", { p_code: code, p_client: client, p_name: name })) ?? [],
+    leave: async (client) => void (await rpc("presence_leave", { p_code: code, p_client: client }, true)),
   };
 }
 
@@ -100,6 +118,8 @@ export function localBackend(): Backend {
       writeLists([...all.filter((l) => l.name !== name), { id: old?.id ?? uid(), name, items }]);
     },
     deleteList: async (id) => writeLists(readLists().filter((l) => l.id !== id)),
+    presence: async () => [],
+    leave: async () => undefined,
   };
 }
 

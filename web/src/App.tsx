@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  BadCode, Locked, canon, clearCode, loadData, localBackend, readCode, remoteBackend, remoteConfigured,
-  saveCode, uid, type Backend, type SavedItem, type SavedList,
+  BadCode, Locked, canon, clearCode, clientId, getName, loadData, localBackend, readCode, remoteBackend, remoteConfigured,
+  saveCode, setName as storeName, uid, type Backend, type Online, type SavedItem, type SavedList,
 } from "./api";
 import { compare, shekel, type Comparison, type StoreResult } from "./compare";
 import { buildIndex, findBarcode, search, type Suggestion } from "./search";
@@ -24,6 +24,9 @@ export default function App() {
   const [data, setData] = useState<Data | null>(null);
   const [dataError, setDataError] = useState("");
   const [tab, setTab] = useState<Tab>("list");
+  const [name, setName] = useState(getName);
+  const [renaming, setRenaming] = useState(false);
+  const [online, setOnline] = useState<Online[]>([]);
   const pending = useRef(0);
 
   useEffect(() => {
@@ -60,6 +63,22 @@ export default function App() {
 
   useEffect(() => { if (tab === "saved") refreshLists(); }, [tab, refreshLists]);
 
+  // "I am here" heartbeat; the server answers with everyone seen in the last 45 seconds
+  useEffect(() => {
+    if (!backend?.shared || !name) return;
+    const me = clientId();
+    let stopped = false;
+    const ping = async () => {
+      if (document.hidden) return;
+      try { const o = await backend.presence(me, name); if (!stopped) setOnline(o); } catch (e) { handleError(e); }
+    };
+    const onVisible = () => { if (document.hidden) backend.leave(me).catch(() => undefined); else ping(); };
+    ping();
+    const t = setInterval(ping, 15000);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { stopped = true; clearInterval(t); document.removeEventListener("visibilitychange", onVisible); };
+  }, [backend, name, handleError]);
+
   const mutate = async (apply: (l: Item[]) => Item[], op: () => Promise<void>) => {
     setItems(apply);
     pending.current++;
@@ -73,7 +92,7 @@ export default function App() {
   const remove = (id: string) => mutate((l) => l.filter((x) => x.id !== id), () => backend!.remove(id));
 
   const saveCurrent = async (name: string): Promise<string> => {
-    const saved: SavedItem[] = items.map(({ id: _id, checked: _checked, ...rest }) => rest);
+    const saved: SavedItem[] = items.map(({ id: _id, checked: _checked, addedBy: _a, checkedBy: _b, createdAt: _d, ...rest }) => rest);
     try {
       await backend!.saveList(name, saved);
       await refreshLists();
@@ -92,7 +111,7 @@ export default function App() {
       const match = items.find((i) => i.kind === si.kind &&
         (si.kind === "barcode" ? i.barcode === si.barcode : si.kind === "weighted" ? i.keyword === si.keyword : i.text === si.text));
       if (match) { already++; if (match.checked) update({ ...match, checked: false }); continue; }
-      add({ ...si, id: uid(), checked: false });
+      add({ ...si, id: uid(), checked: false, addedBy: name, createdAt: new Date().toISOString() });
       added++;
     }
     return `נוספו ${added} פריטים לרשימה` + (already ? `, ${already} כבר היו בה` : "");
@@ -100,6 +119,16 @@ export default function App() {
 
   if (!backend) {
     return <Lock error={lockError} onCode={(c) => { const k = canon(c); saveCode(k); setLockError(false); setCode(k); }} />;
+  }
+
+  if (!name || renaming) {
+    return (
+      <NamePrompt
+        initial={name}
+        onDone={(n) => { storeName(n); setName(n.trim().slice(0, 40)); setRenaming(false); }}
+        onCancel={name ? () => setRenaming(false) : undefined}
+      />
+    );
   }
 
   const open = items.filter((i) => !i.checked).length;
@@ -110,12 +139,13 @@ export default function App() {
         <h1>רשימת קניות</h1>
         <span className={`dot ${status}`} role="img" aria-label={`מצב חיבור: ${statusText}`} title={statusText} />
       </header>
+      <OnlineBar online={online} me={name} shared={backend.shared} onRename={() => setRenaming(true)} />
       <main>
         {!backend.shared && <p className="banner">מצב מקומי: הרשימה נשמרת רק במכשיר הזה.</p>}
         {status === "offline" && <p className="banner warn" role="alert">אין חיבור לשרת. נסו שוב בעוד רגע.</p>}
         {status === "locked" && <p className="banner warn" role="alert">יותר מדי ניסיונות כושלים לקוד, והגישה נעולה זמנית (עד שעה). נסו שוב מאוחר יותר.</p>}
         {dataError && <p className="banner warn" role="alert">לא הצלחתי לטעון את המחירים: {dataError}</p>}
-        {tab === "list" && <ListView items={items} data={data} add={add} update={update} remove={remove} />}
+        {tab === "list" && <ListView items={items} data={data} name={name} add={add} update={update} remove={remove} />}
         {tab === "compare" && (data ? <CompareView items={items} data={data} /> : <p className="muted center">טוען מחירים…</p>)}
         {tab === "saved" && (
           <SavedView lists={lists} hasItems={items.length > 0} onSave={saveCurrent} onLoad={loadSaved} onDelete={deleteSaved} />
@@ -159,19 +189,20 @@ function Lock({ onCode, error }: { onCode: (c: string) => void; error: boolean }
 interface ListProps {
   items: Item[];
   data: Data | null;
+  name: string;
   add: (i: Item) => void;
   update: (i: Item) => void;
   remove: (id: string) => void;
 }
 
-function ListView({ items, data, add, update, remove }: ListProps) {
+function ListView({ items, data, name, add, update, remove }: ListProps) {
   const [q, setQ] = useState("");
   const index = useMemo(() => (data ? buildIndex(data) : null), [data]);
   const sugg = useMemo(() => (index ? search(index, q) : []), [index, q]);
   const [editing, setEditing] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
 
-  const base = { qty: 1, checked: false, exclude: "" };
+  const base = { qty: 1, checked: false, exclude: "", addedBy: name, createdAt: new Date().toISOString() };
   const addSug = (s: Suggestion) => {
     add(s.kind === "weighted"
       ? { ...base, id: uid(), text: s.keyword!, kind: "weighted", keyword: s.keyword }
@@ -191,7 +222,7 @@ function ListView({ items, data, add, update, remove }: ListProps) {
     const name = data.names[code];
     const existing = items.find((i) => i.kind === "barcode" && i.barcode === code);
     if (existing) {
-      update({ ...existing, checked: false, qty: existing.checked ? existing.qty : existing.qty + 1 });
+      update({ ...existing, checked: false, checkedBy: undefined, qty: existing.checked ? existing.qty : existing.qty + 1 });
       return { ok: true, message: `${name}: ${existing.checked ? "הוחזר לרשימה" : "הכמות עודכנה"}` };
     }
     add({ ...base, id: uid(), text: name, kind: "barcode", barcode: code });
@@ -213,12 +244,18 @@ function ListView({ items, data, add, update, remove }: ListProps) {
       <li key={it.id} className={it.checked ? "done" : ""}>
         <div className="r">
           <label className="chk">
-            <input type="checkbox" checked={it.checked} onChange={() => update({ ...it, checked: !it.checked })} />
+            <input type="checkbox" checked={it.checked} onChange={() => update({ ...it, checked: !it.checked, checkedBy: it.checked ? undefined : name })} />
             <span className="sr">{it.checked ? "החזרה לרשימה" : "סימון כבעגלה"}: {it.text}</span>
           </label>
           <div className="t">
             <span>{it.text}</span>
             {sub && <small>{sub}</small>}
+            {(it.addedBy || it.checkedBy) && (
+              <small className="by">
+                {it.addedBy ? `נוסף על ידי ${it.addedBy}${it.createdAt ? ` · ${ago(it.createdAt)}` : ""}` : ""}
+                {it.checked && it.checkedBy ? `${it.addedBy ? " · " : ""}נלקח על ידי ${it.checkedBy}` : ""}
+              </small>
+            )}
           </div>
           <button className="x" onClick={() => remove(it.id)} aria-label={`מחיקה: ${it.text}`}>×</button>
           <div className="ctl">
@@ -441,5 +478,49 @@ function SavedView({ lists, hasItems, onSave, onLoad, onDelete }: SavedProps) {
         ))}
       </ul>
     </section>
+  );
+}
+
+/** "לפני 5 דק'", "לפני שעתיים": how long ago, in plain Hebrew. */
+function ago(iso: string): string {
+  const mins = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+  if (mins < 1) return "הרגע";
+  if (mins < 60) return `לפני ${mins} דק'`;
+  const h = Math.round(mins / 60);
+  if (h < 24) return h === 1 ? "לפני שעה" : `לפני ${h} שעות`;
+  const d = Math.round(h / 24);
+  return d === 1 ? "אתמול" : `לפני ${d} ימים`;
+}
+
+function OnlineBar({ online, me, shared, onRename }: { online: Online[]; me: string; shared: boolean; onRename: () => void }) {
+  const names = [...new Set(online.map((o) => o.name))];
+  const others = names.filter((n) => n !== me);
+  return (
+    <div className="online" role="status" aria-live="polite">
+      {shared && (
+        <span>
+          {others.length === 0
+            ? "רק אתם מחוברים עכשיו"
+            : `${others.length + 1} מחוברים עכשיו: ${[`${me} (אתם)`, ...others].join(", ")}`}
+        </span>
+      )}
+      <button className="link" onClick={onRename}>{shared ? "שינוי שם" : `שלום ${me}, שינוי שם`}</button>
+    </div>
+  );
+}
+
+function NamePrompt({ initial, onDone, onCancel }: { initial: string; onDone: (n: string) => void; onCancel?: () => void }) {
+  const [v, setV] = useState(initial);
+  return (
+    <div className="app lock">
+      <h1>איך קוראים לך?</h1>
+      <p className="muted center">השם יוצג לשאר בני הבית: מי מחובר עכשיו, ומי הוסיף כל מוצר.</p>
+      <form onSubmit={(e) => { e.preventDefault(); if (v.trim()) onDone(v); }}>
+        <label className="sr" htmlFor="myname">השם שלך</label>
+        <input id="myname" value={v} onChange={(e) => setV(e.target.value)} placeholder="למשל: אבא" maxLength={40} autoComplete="given-name" autoFocus />
+        <button type="submit" disabled={!v.trim()}>המשך</button>
+      </form>
+      {onCancel && <button className="link" onClick={onCancel}>ביטול</button>}
+    </div>
   );
 }

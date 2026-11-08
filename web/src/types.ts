@@ -10,6 +10,10 @@ export interface Item {
   keyword?: string;
   exclude?: string;
   checked: boolean;
+  /** display names, set by the person who added the item / put it in the cart */
+  addedBy?: string;
+  checkedBy?: string;
+  createdAt?: string;
 }
 
 export interface Store {
