@@ -144,7 +144,7 @@ export default function Picker({ data, index, items, order, kv, history, initial
                 <ul className="cards">
                   {past.map((h) => (
                     <li key={h.key} className="card">
-                      <ProductImg code={h.kind === "barcode" ? h.barcode ?? undefined : undefined} dept={h.dept ?? OTHER} size={56} />
+                      <ProductImg code={h.kind === "barcode" ? h.barcode ?? undefined : undefined} dept={h.dept ?? OTHER} name={h.text} size={56} />
                       <div className="ct"><b>{h.text}</b><small>נקנה {h.times} פעמים</small></div>
                       <button onClick={() => flash(onAddHistory(h))}>הוספה</button>
                     </li>
@@ -160,7 +160,7 @@ export default function Picker({ data, index, items, order, kv, history, initial
           <ul className="cards">
             {weighted.map((w) => (
               <li key={w.keyword} className="card">
-                <ProductImg dept={classify(w.keyword!, true)} size={56} />
+                <ProductImg dept={classify(w.keyword!, true)} name={w.keyword!} size={56} />
                 <div className="ct"><b>{w.keyword}</b><small>לפי משקל · הזול מכל חנות · {w.stores} חנויות</small></div>
                 <button onClick={() => flash(onAddWeighted(w.keyword!))}>הוספה</button>
               </li>
@@ -175,7 +175,7 @@ export default function Picker({ data, index, items, order, kv, history, initial
               const on = onList(p.code);
               return (
                 <li key={p.code} className="card">
-                  <ProductImg code={p.code} dept={d} size={56} />
+                  <ProductImg code={p.code} dept={d} name={p.name} size={56} />
                   <div className="ct">
                     <b>{p.name}</b>
                     <small>{[data.brands[p.code], `${p.count} חנויות`].filter(Boolean).join(" · ")}</small>

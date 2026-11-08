@@ -345,7 +345,7 @@ function ListView({ items, data, name, kv, history, toggleChecked, setDept, add,
             <span className="sr">{it.checked ? "החזרה לרשימה" : "סימון כבעגלה"}: {it.text}</span>
           </label>
           <div className="t">
-            <ProductImg code={it.kind === "barcode" ? it.barcode : undefined} dept={dep} size={40} />
+            <ProductImg code={it.kind === "barcode" ? it.barcode : undefined} dept={dep} name={it.kind === "weighted" ? it.keyword ?? it.text : it.text} size={40} />
             <span>{it.text}</span>
             {pr && (
               <span className={`price${pr.price == null ? " none" : ""}`}>

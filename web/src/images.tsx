@@ -15,6 +15,40 @@ export const DEPT_EMOJI: Record<string, string> = {
   "קפואים": "🧊", "שימורים ויבשים": "🥫", "חטיפים ומתוקים": "🍫", "משקאות": "🥤", "ניקיון והיגיינה": "🧴", "אחר": "🛒",
 };
 
+/** Soft background per department, so a glance at the list shows where each item belongs. */
+export const DEPT_TINT: Record<string, string> = {
+  "ירקות ופירות": "#16a34a2e", "לחם ומאפים": "#d977062e", "בשר ועוף": "#dc26262e", "דגים": "#0284c72e",
+  "חלב וביצים": "#3b82f62e", "קפואים": "#06b6d42e", "שימורים ויבשים": "#ca8a042e", "חטיפים ומתוקים": "#db27772e",
+  "משקאות": "#8b5cf62e", "ניקיון והיגיינה": "#14b8a62e", "אחר": "#6b72802e",
+};
+
+/** More specific than the department: the first rule that matches the name wins. */
+const ICONS: [RegExp, string][] = [
+  [/פריגת|פרימור|תפוזינה/, "🧃"], [/אנרגיה|מונסטר|רד בול/, "⚡"], [/ערק|ויסקי|וודקה|ליקר/, "🥃"], [/מרק/, "🍲"],
+  [/שוקולד|קליק/, "🍫"], [/עוגיות|ביסקוויט|וופל/, "🍪"], [/עוגה|עוגת|קרואסון|מאפה/, "🍰"], [/גלידה|גלידת|שלגון|קורנטו/, "🍦"],
+  [/במבה|ביסלי|פופקורן|חטיף|ציפס|דוריטוס|ציטוס|פריכ/, "🍿"], [/סוכריות|סוכריה|גומי|מסטיק|מנטוס|ממתק/, "🍬"],
+  [/ביצים|ביצי/, "🥚"], [/חמאה|מרגרינה/, "🧈"], [/גבינ|קוטג|מוצרלה|פרמזן|גאודה|עמק|בולגרית|צפתית|לבנה/, "🧀"],
+  [/חלב|שוקו/, "🥛"], [/יוגורט|שמנת|מעדן|מילקי|דנונה|פודינג|דניאלה|קרמיסימו/, "🥣"],
+  [/חלה|בגט/, "🥖"], [/לחם|פיתה|לחמני|טורטייה|לאפה|בייגל/, "🍞"], [/קורנפלקס|דגנים|גרנולה|שיבולת/, "🥣"],
+  [/קפה|נסקפה|אספרסו/, "☕"], [/(^|\s)תה(\s|$)|חליטת/, "🍵"], [/מיץ|נקטר|קרטונית/, "🧃"], [/בירה/, "🍺"], [/(^|\s)יין(\s|$)|קברנה|מרלו/, "🍷"],
+  [/(^|\s)מים(\s|$)|נביעות|מינרלים/, "💧"], [/קולה|פפסי|ספרייט|פנטה|פאנטה|שוופס|משקה|סודה|סירופ/, "🥤"],
+  [/אורז/, "🍚"], [/פסטה|ספגטי|אטריות|פתיתים|קוסקוס|מקרוני/, "🍝"], [/שמן|זית/, "🫒"], [/דבש/, "🍯"], [/ריבה|קונפיטור/, "🍓"],
+  [/מלח|תבלין|פפריקה|קמח|סוכר|קורנפלור/, "🧂"], [/חומוס|טחינה|עדשים|שעועית|קטניות/, "🫘"], [/קטשופ|רוטב|מיונז|חרדל/, "🥫"],
+  [/טונה|סלמון|(^|\s)דגים?(\s|$)|הרינג|סרדין/, "🐟"], [/חזה עוף|שוק עוף|כנפי|עוף|הודו|שניצל|פרגית/, "🍗"],
+  [/נקניק|פסטרמה|סלמי|קבנוס/, "🌭"], [/בשר|סטייק|אנטריקוט|המבורגר|קבב|בקר|כבש|צלעות/, "🥩"],
+  [/עגבני/, "🍅"], [/מלפפון/, "🥒"], [/גזר/, "🥕"], [/בצל/, "🧅"], [/שום/, "🧄"], [/תפוח אדמה|תפו"א|תפוא/, "🥔"], [/בטטה/, "🍠"],
+  [/פלפל/, "🫑"], [/חסה|כרוב|תרד|עלים|פטרוזיליה|כוסברה|נענע|שמיר/, "🥬"], [/ברוקולי|כרובית/, "🥦"], [/אבוקדו/, "🥑"], [/חציל/, "🍆"],
+  [/תירס/, "🌽"], [/פטריות/, "🍄"], [/לימון/, "🍋"], [/תפוז|מנדרינ|קלמנטינ|אשכולית|פומלה/, "🍊"], [/בננ/, "🍌"], [/תפוח/, "🍎"],
+  [/ענבים/, "🍇"], [/אבטיח/, "🍉"], [/תות/, "🍓"], [/מנגו/, "🥭"], [/אננס/, "🍍"], [/אגס/, "🍐"], [/אפרסק|נקטרינ|שזיף/, "🍑"], [/דובדבן/, "🍒"],
+  [/נייר טואלט/, "🧻"], [/סבון|שמפו|מרכך|נוזל כלים|אקונומיקה|מנקה|כביסה/, "🧼"], [/חיתול/, "👶"], [/משחת שיניים/, "🪥"],
+];
+
+export function iconFor(name: string | undefined, dept: string): string {
+  const n = (name ?? "").replace(/["'׳״`]/g, "");
+  for (const [rx, icon] of ICONS) if (rx.test(n)) return icon;
+  return DEPT_EMOJI[dept] ?? "🛒";
+}
+
 const KEY = "super.img";
 const RETRY_MISSING_AFTER = 30 * 24 * 3600 * 1000;
 /** gap: about 45 requests a minute, below the documented 100/min with room to spare; cooldown: after a 429 or server error */
@@ -96,7 +130,7 @@ export function release(code: string) {
   interest.set(code, Math.max(0, (interest.get(code) ?? 1) - 1));
 }
 
-export function ProductImg({ code, dept, size = 44 }: { code?: string; dept: string; size?: number }) {
+export function ProductImg({ code, dept, name, size = 44 }: { code?: string; dept: string; name?: string; size?: number }) {
   const ref = useRef<HTMLSpanElement>(null);
   const [url, setUrl] = useState<string>(() => (code ? load()[code]?.[0] ?? "" : ""));
   const [broken, setBroken] = useState(false);
@@ -122,10 +156,10 @@ export function ProductImg({ code, dept, size = 44 }: { code?: string; dept: str
   }, [code, url]);
 
   return (
-    <span ref={ref} className="pimg" style={{ width: size, height: size }} aria-hidden="true">
+    <span ref={ref} className="pimg" style={{ width: size, height: size, background: DEPT_TINT[dept] ?? DEPT_TINT["אחר"] }} aria-hidden="true">
       {url && !broken
         ? <img src={url} alt="" loading="lazy" onError={() => { setBroken(true); if (code) forget(code); }} />
-        : <span className="emo" style={{ fontSize: size * 0.55 }}>{DEPT_EMOJI[dept] ?? "🛒"}</span>}
+        : <span className="emo" style={{ fontSize: size * 0.58 }}>{iconFor(name, dept)}</span>}
     </span>
   );
 }
