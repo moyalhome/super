@@ -65,11 +65,11 @@ def _latest(files, store_id):
 SHUF = "https://prices.shufersal.co.il/FileObject/UpdateCategory"
 
 def _shuf_links(cat, store=0):
-    h = requests.get(SHUF, params={"catID": cat, "storeId": store}, headers=UA, timeout=60).text
+    h = requests.get(SHUF, params={"catID": cat, "storeId": store}, headers=UA, timeout=(30, 240)).text
     return re.findall(r'href="(https://[^"]+)"', h.replace("&amp;", "&"))
 
 def shufersal_stores():
-    root = parse_xml(requests.get(_shuf_links(5)[0], headers=UA, timeout=120).content)
+    root = parse_xml(requests.get(_shuf_links(5)[0], headers=UA, timeout=(30, 300)).content)
     return store_rows(root, "shufersal", "שופרסל")
 
 def shufersal_pricefull(store_id):

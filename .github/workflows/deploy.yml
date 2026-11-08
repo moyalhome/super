@@ -58,6 +58,7 @@ jobs:
         env:
           HOME_ADDRESS: ${{ secrets.HOME_ADDRESS }}
           RADIUS_KM: "4"
+          PUBLISHED_BASE: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
         run: python ingest/run_pipeline.py web/public/data
 
       - name: Fall back to the last published data

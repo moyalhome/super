@@ -6,8 +6,10 @@ env:   HOME_ADDRESS (required, never committed), RADIUS_KM (default 4)
 The vendored plugin scripts have no retry logic and some portals are slow (Shufersal takes ~40s),
 so each step is repeated a few times. Results are cached per day, so retries only redo what failed.
 """
-import os, subprocess, sys
+import json, os, subprocess, sys
 from pathlib import Path
+
+import requests
 
 HERE = Path(__file__).parent
 PY = sys.executable
@@ -55,7 +57,23 @@ def main():
 
     # 3. compact JSON for the app
     r = run(["build_data.py", out], "build data files")
-    sys.exit(r.returncode)
+    if r.returncode != 0:
+        sys.exit(r.returncode)
+
+    # 4. never replace complete published data with a partial download (a slow portal that timed out would
+    #    otherwise silently drop a whole chain). Exit non-zero so the workflow keeps the published data.
+    base = os.environ.get("PUBLISHED_BASE", "").rstrip("/")
+    if base:
+        try:
+            prev = requests.get(f"{base}/data/stores.json", timeout=30).json()
+            now = json.loads((Path(out) / "stores.json").read_text(encoding="utf-8"))
+            lost = {s["key"] for s in prev} - {s["key"] for s in now}
+            if lost:
+                print(f"ERROR: the new data lacks {len(lost)} store(s) that are in the published data "
+                      f"({', '.join(sorted(lost))[:200]}). Keeping the published data.", file=sys.stderr)
+                sys.exit(3)
+        except (requests.RequestException, ValueError) as e:
+            print(f"note: could not compare with the published data ({e}); continuing", file=sys.stderr)
 
 
 if __name__ == "__main__":
