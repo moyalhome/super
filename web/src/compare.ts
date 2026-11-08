@@ -59,77 +59,111 @@ export function priceItem(data: Data, storeIndex: number, item: Item): Priced {
 export interface StoreResult {
   store: Store;
   index: number;
+  /** one entry per required item, same order as Comparison.items */
   lines: Priced[];
+  /** sum of the items this store carries */
   total: number;
   found: number;
-  coverage: number;
-  fairTotal: number;
+  missing: Item[];
+}
+
+export interface SplitPlan {
+  stores: { store: Store; items: { item: Item; price: number }[]; total: number }[];
+  total: number;
+  uncovered: Item[];
 }
 
 export interface Comparison {
+  /** items on the list that at least one store carries */
   items: Item[];
+  /** priced items that no nearby store carries */
+  notFound: Item[];
+  /** free-text items (no price) */
   unpriced: Item[];
   results: StoreResult[];
-  visible: number[];
-  fairItems: Item[];
+  /** stores that carry every item, cheapest first */
+  full: StoreResult[];
+  /** stores missing something, most complete first */
+  partial: StoreResult[];
   winner: StoreResult | null;
-  winnerFull: boolean;
-  split: { store: Store; items: { item: Item; price: number }[]; total: number }[];
-  splitTotal: number;
-  skippedItems: Item[];
+  split: SplitPlan;
 }
 
-/** Default view hides stores that carry less than this share of the list, so one thin store cannot shrink the fair set. */
-export const DEFAULT_COVERAGE = 0.7;
+/** maxStores = 0 means no limit. */
+function planSplit(results: StoreResult[], items: Item[], maxStores: number): SplitPlan {
+  const n = results.length;
+  const cheapest = (combo: number[], k: number) => {
+    let best: { si: number; price: number } | null = null;
+    for (const si of combo) {
+      const p = results[si].lines[k].price;
+      if (p != null && (!best || p < best.price)) best = { si, price: p };
+    }
+    return best;
+  };
+  const evaluate = (combo: number[]) => {
+    let covered = 0, total = 0;
+    items.forEach((_, k) => { const b = cheapest(combo, k); if (b) { covered++; total += b.price; } });
+    return { covered, total };
+  };
 
-/** overrides: store index -> true (force show) / false (force hide); otherwise shown when coverage is high enough */
-export function compare(data: Data, all: Item[], overrides: Map<number, boolean>): Comparison {
+  let bestCombo: number[] = [];
+  if (!maxStores || maxStores >= n) {
+    bestCombo = results.map((r) => r.index);
+  } else {
+    let best = { covered: -1, total: Infinity };
+    const walk = (start: number, combo: number[]) => {
+      if (combo.length) {
+        const e = evaluate(combo);
+        if (e.covered > best.covered || (e.covered === best.covered && e.total < best.total)) { best = e; bestCombo = [...combo]; }
+      }
+      if (combo.length === maxStores) return;
+      for (let i = start; i < n; i++) walk(i + 1, [...combo, i]);
+    };
+    walk(0, []);
+  }
+
+  const byStore = new Map<number, { item: Item; price: number }[]>();
+  const uncovered: Item[] = [];
+  items.forEach((it, k) => {
+    const b = cheapest(bestCombo, k);
+    if (!b) { uncovered.push(it); return; }
+    const arr = byStore.get(b.si) ?? [];
+    arr.push({ item: it, price: b.price });
+    byStore.set(b.si, arr);
+  });
+  const stores = [...byStore.entries()]
+    .map(([si, its]) => ({ store: results[si].store, items: its, total: its.reduce((s, x) => s + x.price, 0) }))
+    .sort((a, b) => b.total - a.total);
+  return { stores, total: stores.reduce((s, x) => s + x.total, 0), uncovered };
+}
+
+export function compare(data: Data, all: Item[], splitMax: number): Comparison {
   const active = all.filter((i) => !i.checked);
-  const items = active.filter((i) => i.kind !== "free");
+  const priced = active.filter((i) => i.kind !== "free");
   const unpriced = active.filter((i) => i.kind === "free");
 
-  const results: StoreResult[] = data.stores.map((store, index) => {
-    const lines = items.map((it) => priceItem(data, index, it));
-    const found = lines.filter((l) => l.price != null).length;
-    const total = lines.reduce((s, l) => s + (l.price ?? 0), 0);
-    return { store, index, lines, total, found, coverage: items.length ? found / items.length : 0, fairTotal: 0 };
+  const lines = data.stores.map((_, si) => priced.map((it) => priceItem(data, si, it)));
+  const carried = priced.map((_, k) => lines.some((l) => l[k].price != null));
+  const idx = priced.map((_, k) => k).filter((k) => carried[k]);
+  const items = idx.map((k) => priced[k]);
+  const notFound = priced.filter((_, k) => !carried[k]);
+
+  const results: StoreResult[] = data.stores.map((store, si) => {
+    const ls = idx.map((k) => lines[si][k]);
+    return {
+      store, index: si, lines: ls,
+      total: ls.reduce((s, l) => s + (l.price ?? 0), 0),
+      found: ls.filter((l) => l.price != null).length,
+      missing: items.filter((_, j) => ls[j].price == null),
+    };
   });
 
-  const auto = results.filter((r) => r.coverage >= DEFAULT_COVERAGE).map((r) => r.index);
-  const base = auto.length ? auto : results.map((r) => r.index);
-  const visible = results.map((r) => r.index).filter((i) => (overrides.has(i) ? overrides.get(i) : base.includes(i)));
-
-  // fair comparison: only items that every visible store carries
-  const fairIdx = items.map((_, k) => k).filter((k) => visible.every((si) => results[si].lines[k].price != null));
-  const fairItems = fairIdx.map((k) => items[k]);
-  for (const r of results) r.fairTotal = fairIdx.reduce((s, k) => s + (r.lines[k].price ?? 0), 0);
-
-  const vis = visible.map((i) => results[i]);
-  const full = vis.filter((r) => r.found === items.length && items.length > 0);
-  const pool = full.length ? full : vis;
-  const winner = pool.length ? [...pool].sort((a, b) => (full.length ? a.total - b.total : a.fairTotal - b.fairTotal))[0] : null;
-
-  // split basket: cheapest visible store per item
-  const byStore = new Map<number, { item: Item; price: number }[]>();
-  const skippedItems: Item[] = [];
-  items.forEach((it, k) => {
-    let best: StoreResult | null = null;
-    for (const r of vis) {
-      const p = r.lines[k].price;
-      if (p != null && (!best || p < (best.lines[k].price as number))) best = r;
-    }
-    if (!best) return void skippedItems.push(it);
-    const arr = byStore.get(best.index) ?? [];
-    arr.push({ item: it, price: best.lines[k].price as number });
-    byStore.set(best.index, arr);
-  });
-  const split = [...byStore.entries()]
-    .map(([si, its]) => ({ store: data.stores[si], items: its, total: its.reduce((s, x) => s + x.price, 0) }))
-    .sort((a, b) => b.total - a.total);
-
+  const full = results.filter((r) => items.length > 0 && r.missing.length === 0).sort((a, b) => a.total - b.total);
+  const partial = results.filter((r) => r.missing.length > 0).sort((a, b) => b.found - a.found || a.total - b.total);
   return {
-    items, unpriced, results, visible, fairItems, winner, winnerFull: full.length > 0,
-    split, splitTotal: split.reduce((s, x) => s + x.total, 0), skippedItems,
+    items, notFound, unpriced, results, full, partial,
+    winner: full[0] ?? partial[0] ?? null,
+    split: planSplit(results, items, splitMax),
   };
 }
 

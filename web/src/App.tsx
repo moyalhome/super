@@ -1,22 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  BadCode, Locked, canon, clearCode, loadData, localBackend, readCode, remoteBackend, remoteConfigured, saveCode,
-  type Backend,
+  BadCode, Locked, canon, clearCode, loadData, localBackend, readCode, remoteBackend, remoteConfigured,
+  saveCode, uid, type Backend, type SavedItem, type SavedList,
 } from "./api";
-import { compare, shekel, type Comparison } from "./compare";
+import { compare, shekel, type Comparison, type StoreResult } from "./compare";
 import { buildIndex, findBarcode, search, type Suggestion } from "./search";
 import Scanner, { type ScanResult } from "./Scanner";
 import type { Data, Item } from "./types";
 
-const uid = () =>
-  typeof crypto !== "undefined" && "randomUUID" in crypto
-    ? crypto.randomUUID()
-    : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-        const r = (Math.random() * 16) | 0;
-        return (c === "x" ? r : (r & 3) | 8).toString(16);
-      });
-
 type Status = "loading" | "ok" | "offline" | "locked";
+type Tab = "list" | "compare" | "saved";
 
 export default function App() {
   const [code, setCode] = useState<string | null>(() => readCode());
@@ -25,11 +18,12 @@ export default function App() {
     [code],
   );
   const [items, setItems] = useState<Item[]>([]);
+  const [lists, setLists] = useState<SavedList[]>([]);
   const [status, setStatus] = useState<Status>("loading");
   const [lockError, setLockError] = useState(false);
   const [data, setData] = useState<Data | null>(null);
   const [dataError, setDataError] = useState("");
-  const [tab, setTab] = useState<"list" | "compare">("list");
+  const [tab, setTab] = useState<Tab>("list");
   const pending = useRef(0);
 
   useEffect(() => {
@@ -51,6 +45,11 @@ export default function App() {
     } catch (e) { handleError(e); }
   }, [backend, handleError]);
 
+  const refreshLists = useCallback(async () => {
+    if (!backend) return;
+    try { setLists(await backend.lists()); } catch (e) { handleError(e); }
+  }, [backend, handleError]);
+
   useEffect(() => {
     refresh();
     const tick = () => { if (!document.hidden) refresh(); };
@@ -58,6 +57,8 @@ export default function App() {
     document.addEventListener("visibilitychange", tick);
     return () => { clearInterval(t); document.removeEventListener("visibilitychange", tick); };
   }, [refresh]);
+
+  useEffect(() => { if (tab === "saved") refreshLists(); }, [tab, refreshLists]);
 
   const mutate = async (apply: (l: Item[]) => Item[], op: () => Promise<void>) => {
     setItems(apply);
@@ -71,35 +72,69 @@ export default function App() {
   const update = (item: Item) => mutate((l) => l.map((x) => (x.id === item.id ? item : x)), () => backend!.upsert(item));
   const remove = (id: string) => mutate((l) => l.filter((x) => x.id !== id), () => backend!.remove(id));
 
+  const saveCurrent = async (name: string): Promise<string> => {
+    const saved: SavedItem[] = items.map(({ id: _id, checked: _checked, ...rest }) => rest);
+    try {
+      await backend!.saveList(name, saved);
+      await refreshLists();
+      return `נשמרה הרשימה "${name}" (${saved.length} פריטים)`;
+    } catch (e) {
+      handleError(e);
+      return "השמירה נכשלה, נסו שוב";
+    }
+  };
+  const deleteSaved = async (id: string) => {
+    try { await backend!.deleteList(id); await refreshLists(); } catch (e) { handleError(e); }
+  };
+  const loadSaved = (list: SavedList): string => {
+    let added = 0, already = 0;
+    for (const si of list.items) {
+      const match = items.find((i) => i.kind === si.kind &&
+        (si.kind === "barcode" ? i.barcode === si.barcode : si.kind === "weighted" ? i.keyword === si.keyword : i.text === si.text));
+      if (match) { already++; if (match.checked) update({ ...match, checked: false }); continue; }
+      add({ ...si, id: uid(), checked: false });
+      added++;
+    }
+    return `נוספו ${added} פריטים לרשימה` + (already ? `, ${already} כבר היו בה` : "");
+  };
+
   if (!backend) {
     return <Lock error={lockError} onCode={(c) => { const k = canon(c); saveCode(k); setLockError(false); setCode(k); }} />;
   }
 
   const open = items.filter((i) => !i.checked).length;
+  const statusText = status === "ok" ? "מחובר" : status === "offline" ? "אין חיבור" : status === "locked" ? "נעול זמנית" : "טוען";
   return (
     <div className="app">
       <header>
         <h1>רשימת קניות</h1>
-        <span className={`dot ${status}`} title={status === "ok" ? "מחובר" : status === "offline" ? "אין חיבור" : "טוען"} />
+        <span className={`dot ${status}`} role="img" aria-label={`מצב חיבור: ${statusText}`} title={statusText} />
       </header>
-      {!backend.shared && <p className="banner">מצב מקומי: הרשימה נשמרת רק במכשיר הזה.</p>}
-      {status === "locked" && <p className="banner warn">יותר מדי ניסיונות כושלים לקוד, והגישה נעולה זמנית (עד שעה). נסו שוב מאוחר יותר.</p>}
-      {status === "offline" && <p className="banner warn">אין חיבור לשרת. השינויים יישמרו כשהחיבור יחזור.</p>}
-      <nav>
-        <button className={tab === "list" ? "on" : ""} onClick={() => setTab("list")}>רשימה ({open})</button>
-        <button className={tab === "compare" ? "on" : ""} onClick={() => setTab("compare")}>איפה הכי זול</button>
+      <main>
+        {!backend.shared && <p className="banner">מצב מקומי: הרשימה נשמרת רק במכשיר הזה.</p>}
+        {status === "offline" && <p className="banner warn" role="alert">אין חיבור לשרת. נסו שוב בעוד רגע.</p>}
+        {status === "locked" && <p className="banner warn" role="alert">יותר מדי ניסיונות כושלים לקוד, והגישה נעולה זמנית (עד שעה). נסו שוב מאוחר יותר.</p>}
+        {dataError && <p className="banner warn" role="alert">לא הצלחתי לטעון את המחירים: {dataError}</p>}
+        {tab === "list" && <ListView items={items} data={data} add={add} update={update} remove={remove} />}
+        {tab === "compare" && (data ? <CompareView items={items} data={data} /> : <p className="muted center">טוען מחירים…</p>)}
+        {tab === "saved" && (
+          <SavedView lists={lists} hasItems={items.length > 0} onSave={saveCurrent} onLoad={loadSaved} onDelete={deleteSaved} />
+        )}
+        {code && remoteConfigured && (
+          <footer><button className="link" onClick={() => { clearCode(); setCode(null); }}>התנתקות מהמכשיר הזה</button></footer>
+        )}
+      </main>
+      <nav className="tabbar" aria-label="ניווט ראשי">
+        <button aria-current={tab === "list" ? "page" : undefined} onClick={() => setTab("list")}>
+          <span aria-hidden="true">📝</span>רשימה ({open})
+        </button>
+        <button aria-current={tab === "compare" ? "page" : undefined} onClick={() => setTab("compare")}>
+          <span aria-hidden="true">🛒</span>איפה הכי זול
+        </button>
+        <button aria-current={tab === "saved" ? "page" : undefined} onClick={() => setTab("saved")}>
+          <span aria-hidden="true">📂</span>שמורות
+        </button>
       </nav>
-      {dataError && <p className="banner warn">לא הצלחתי לטעון את המחירים: {dataError}</p>}
-      {tab === "list" ? (
-        <ListView items={items} data={data} add={add} update={update} remove={remove} />
-      ) : data ? (
-        <CompareView items={items} data={data} />
-      ) : (
-        <p className="muted">טוען מחירים…</p>
-      )}
-      {code && remoteConfigured && (
-        <footer><button className="link" onClick={() => { clearCode(); setCode(null); }}>התנתק מהמכשיר הזה</button></footer>
-      )}
     </div>
   );
 }
@@ -109,10 +144,11 @@ function Lock({ onCode, error }: { onCode: (c: string) => void; error: boolean }
   return (
     <div className="app lock">
       <h1>רשימת קניות</h1>
-      <p className="muted">הקלידו את קוד הבית, או פתחו את הקישור ששלחו לכם.</p>
-      {error && <p className="banner warn">הקוד לא נכון. אותיות גדולות, רווחים ומקפים לא משנים, אבל כל תו אחר כן.</p>}
+      <p className="muted center">הקלידו את קוד הבית, או פתחו את הקישור ששלחו לכם.</p>
+      {error && <p className="banner warn" role="alert">הקוד לא נכון. אותיות גדולות, רווחים ומקפים לא משנים, אבל כל תו אחר כן.</p>}
       <form onSubmit={(e) => { e.preventDefault(); if (v.trim()) onCode(v); }}>
-        <input value={v} onChange={(e) => setV(e.target.value)} placeholder="קוד הבית" dir="ltr" autoComplete="off"
+        <label className="sr" htmlFor="code">קוד הבית</label>
+        <input id="code" value={v} onChange={(e) => setV(e.target.value)} placeholder="קוד הבית" dir="ltr" autoComplete="off"
           autoCapitalize="none" autoCorrect="off" spellCheck={false} autoFocus />
         <button type="submit">כניסה</button>
       </form>
@@ -176,17 +212,25 @@ function ListView({ items, data, add, update, remove }: ListProps) {
     return (
       <li key={it.id} className={it.checked ? "done" : ""}>
         <div className="r">
-          <input type="checkbox" checked={it.checked} onChange={() => update({ ...it, checked: !it.checked })} aria-label="סמן" />
-          <div className="t" onClick={() => it.kind === "weighted" && setEditing(editing === it.id ? null : it.id)}>
+          <label className="chk">
+            <input type="checkbox" checked={it.checked} onChange={() => update({ ...it, checked: !it.checked })} />
+            <span className="sr">{it.checked ? "החזרה לרשימה" : "סימון כבעגלה"}: {it.text}</span>
+          </label>
+          <div className="t">
             <span>{it.text}</span>
             {sub && <small>{sub}</small>}
           </div>
-          <div className="q">
-            <button onClick={() => update({ ...it, qty: Math.max(step, +(it.qty - step).toFixed(1)) })} aria-label="פחות">−</button>
-            <span>{it.qty} {unit}</span>
-            <button onClick={() => update({ ...it, qty: +(it.qty + step).toFixed(1) })} aria-label="יותר">+</button>
+          <button className="x" onClick={() => remove(it.id)} aria-label={`מחיקה: ${it.text}`}>×</button>
+          <div className="ctl">
+            <div className="q" role="group" aria-label={`כמות: ${it.text}`}>
+              <button onClick={() => update({ ...it, qty: Math.max(step, +(it.qty - step).toFixed(1)) })} aria-label={`הפחתת כמות: ${it.text}`}>−</button>
+              <span aria-live="polite">{it.qty} {unit}</span>
+              <button onClick={() => update({ ...it, qty: +(it.qty + step).toFixed(1) })} aria-label={`הגדלת כמות: ${it.text}`}>+</button>
+            </div>
+            {it.kind === "weighted" && (
+              <button className="ghost" aria-expanded={editing === it.id} onClick={() => setEditing(editing === it.id ? null : it.id)}>עריכה</button>
+            )}
           </div>
-          <button className="x" onClick={() => remove(it.id)} aria-label="מחק">×</button>
         </div>
         {editing === it.id && it.kind === "weighted" && (
           <div className="edit">
@@ -199,119 +243,203 @@ function ListView({ items, data, add, update, remove }: ListProps) {
   };
 
   return (
-    <section>
+    <section aria-label="הרשימה שלי">
       <form className="add" onSubmit={(e) => { e.preventDefault(); sugg.length ? addSug(sugg[0]) : addFree(); }}>
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="מה להוסיף? למשל חלב, מלפפון…" enterKeyHint="done" />
+        <label className="sr" htmlFor="add">הוספת מוצר</label>
+        <input id="add" value={q} onChange={(e) => setQ(e.target.value)} placeholder="מה להוסיף? למשל חלב, מלפפון…" enterKeyHint="done" autoComplete="off" />
         <button type="submit" disabled={!q.trim()}>הוסף</button>
       </form>
       <button type="button" className="scan" onClick={() => setScanning(true)}>📷 סריקת ברקוד של מוצר</button>
       {scanning && <Scanner onCode={handleCode} onUnknownNamed={addNamed} onClose={() => setScanning(false)} />}
       {q.trim() && (
-        <ul className="sugg">
+        <ul className="sugg" aria-label="הצעות">
           {sugg.map((s, k) => (
             <li key={k}><button onClick={() => addSug(s)}><span>{s.label}</span><small>{s.stores} חנויות</small></button></li>
           ))}
           <li><button onClick={addFree}><span>הוסף "{q.trim()}" כטקסט חופשי</span><small>בלי מחיר</small></button></li>
         </ul>
       )}
-      {!items.length && !q && <p className="muted">הרשימה ריקה. התחילו להקליד כדי להוסיף מוצר.</p>}
+      {!items.length && !q && <p className="muted center">הרשימה ריקה. הקלידו שם מוצר, או סרקו ברקוד.</p>}
       <ul className="items">{todo.map(row)}</ul>
-      {done.length > 0 && (<><h3>בעגלה</h3><ul className="items">{done.map(row)}</ul></>)}
+      {done.length > 0 && (
+        <>
+          <h2 className="h">בעגלה ({done.length})</h2>
+          <ul className="items">{done.map(row)}</ul>
+          <button className="wide" onClick={() => { if (window.confirm(`למחוק ${done.length} פריטים שבעגלה מהרשימה?`)) done.forEach((d) => remove(d.id)); }}>
+            ניקוי הפריטים שבעגלה
+          </button>
+        </>
+      )}
     </section>
   );
 }
 
+function StoreRow({ r, c, base }: { r: StoreResult; c: Comparison; base?: number }) {
+  const full = r.missing.length === 0;
+  const pct = base && r.total > base ? ((r.total / base - 1) * 100).toFixed(1) : null;
+  return (
+    <li>
+      <details>
+        <summary>
+          <span className="n">{r.store.name}<small>{r.store.band}{r.store.approx ? " · מיקום משוער" : ""}</small></span>
+          <span className="p">
+            <b>{shekel(r.total)}</b>
+            {full ? (pct && <small>+{pct}%</small>) : <small>חסרים {r.missing.length}</small>}
+          </span>
+        </summary>
+        <p className="muted">{r.store.address}</p>
+        {!full && <p className="warn">חסרים: {r.missing.map((i) => i.text).join(", ")}</p>}
+        <table>
+          <caption className="sr">פירוט המחירים ב{r.store.name}</caption>
+          <tbody>
+            {c.items.map((it, k) => (
+              <tr key={it.id} className={r.lines[k].price == null ? "miss" : ""}>
+                <td>{it.text}{r.lines[k].label && <small>{r.lines[k].label}</small>}</td>
+                <td>{r.lines[k].price == null ? "חסר" : shekel(r.lines[k].price!)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </details>
+    </li>
+  );
+}
+
+const SPLITS: { max: number; label: string }[] = [
+  { max: 2, label: "עד 2 חנויות" },
+  { max: 3, label: "עד 3 חנויות" },
+  { max: 0, label: "בלי הגבלה" },
+];
+
 function CompareView({ items, data }: { items: Item[]; data: Data }) {
-  const [overrides, setOverrides] = useState<Map<number, boolean>>(new Map());
-  const c: Comparison = useMemo(() => compare(data, items, overrides), [data, items, overrides]);
-  const toggle = (i: number) => {
-    const m = new Map(overrides);
-    m.set(i, !c.visible.includes(i));
-    setOverrides(m);
-  };
+  const [splitMax, setSplitMax] = useState(2);
+  const [onlyFull, setOnlyFull] = useState(false);
+  const c: Comparison = useMemo(() => compare(data, items, splitMax), [data, items, splitMax]);
 
+  if (!items.some((i) => !i.checked && i.kind !== "free"))
+    return <p className="muted center">הוסיפו לרשימה מוצרים עם מחיר (לא טקסט חופשי) כדי לראות השוואה.</p>;
   if (!c.items.length)
-    return <p className="muted">הוסיפו לרשימה מוצרים עם מחיר (לא טקסט חופשי) כדי לראות השוואה.</p>;
+    return <p className="muted center">אף אחד מהמוצרים ברשימה לא נמצא בחנויות באזור: {c.notFound.map((i) => i.text).join(", ")}</p>;
 
-  const vis = c.visible.map((i) => c.results[i]);
-  const sorted = [...vis].sort((a, b) => a.fairTotal - b.fairTotal);
-  const best = sorted[0]?.fairTotal ?? 0;
+  const cheapest = c.full[0]?.total;
+  const priciest = c.full.length > 1 ? c.full[c.full.length - 1].total : undefined;
+  const w = c.winner;
 
   return (
-    <section className="cmp">
-      {c.winner ? (
+    <section aria-label="השוואת מחירים">
+      {w ? (
         <div className="win">
-          <small>{c.winnerFull ? "הכי זול לכל הרשימה" : "הכי זול (לא כל הפריטים קיימים שם)"}</small>
-          <h2>{c.winner.store.name}</h2>
-          <p>{c.winner.store.address} · {c.winner.store.band}</p>
-          <strong>{shekel(c.winnerFull ? c.winner.total : c.winner.fairTotal)}</strong>
-          {!c.winnerFull && <p className="muted">חסרים שם: {c.items.filter((_, k) => c.winner!.lines[k].price == null).map((i) => i.text).join(", ") || "—"}</p>}
+          <small>{c.full.length ? "הכי זול, ויש בו את כל הרשימה" : "אין חנות שיש בה את כל הרשימה. הכי קרוב:"}</small>
+          <h2>{w.store.name}</h2>
+          <p>{w.store.address} · {w.store.band}</p>
+          <strong>{shekel(w.total)}</strong>
+          {!c.full.length && <p>חסרים שם: {w.missing.map((i) => i.text).join(", ")}</p>}
+          {cheapest != null && priciest != null && priciest > cheapest && (
+            <p>חיסכון של {shekel(priciest - cheapest)} לעומת החנות היקרה מבין {c.full.length} החנויות שיש בהן הכול</p>
+          )}
         </div>
-      ) : <p className="muted">אין חנות שמכסה את הרשימה. הציגו עוד חנויות למטה.</p>}
+      ) : <p className="muted center">לא נמצאו חנויות.</p>}
 
-      <h3>השוואה הוגנת</h3>
-      <p className="muted">
-        רק על {c.fairItems.length} פריטים שקיימים בכל החנויות המוצגות
-        {c.fairItems.length < c.items.length ? ` (מתוך ${c.items.length})` : ""}.
+      <h2 className="h">חנויות שיש בהן את כל הרשימה ({c.full.length})</h2>
+      {c.full.length
+        ? <ul className="stores">{c.full.map((r) => <StoreRow key={r.store.key} r={r} c={c} base={cheapest} />)}</ul>
+        : <p className="muted center">אין חנות כזו כרגע. החנויות שחסר בהן הכי מעט מופיעות למטה.</p>}
+
+      <label className="check">
+        <input type="checkbox" checked={onlyFull} onChange={(e) => setOnlyFull(e.target.checked)} />
+        הצגת חנויות עם הרשימה המלאה בלבד
+      </label>
+
+      {!onlyFull && c.partial.length > 0 && (
+        <>
+          <h2 className="h">חנויות שחסרים בהן פריטים ({c.partial.length})</h2>
+          <p className="muted center">הסכום הוא רק על מה שנמצא בחנות, ולכן לא ניתן להשוות אותו ישירות.</p>
+          <ul className="stores">{c.partial.map((r) => <StoreRow key={r.store.key} r={r} c={c} />)}</ul>
+        </>
+      )}
+
+      <h2 className="h">פיצול הסל</h2>
+      <div className="seg" role="radiogroup" aria-label="מספר חנויות מקסימלי לפיצול">
+        {SPLITS.map((s) => (
+          <button key={s.max} role="radio" aria-checked={splitMax === s.max} onClick={() => setSplitMax(s.max)}>{s.label}</button>
+        ))}
+      </div>
+      <p className="muted center">
+        הזול ביותר לכל פריט, כשקונים ב{splitMax ? `עד ${splitMax} חנויות` : "כמה חנויות שצריך"}: <b>{shekel(c.split.total)}</b>
+        {cheapest != null && c.split.uncovered.length === 0 && c.split.total < cheapest ? ` (חיסכון של ${shekel(cheapest - c.split.total)} לעומת החנות הזולה עם הרשימה המלאה)` : ""}
       </p>
-      <ul className="stores">
-        {sorted.map((r) => (
-          <li key={r.store.key}>
-            <details>
-              <summary>
-                <span className="n">{r.store.name}<small>{r.store.band}</small></span>
-                <span className="p">
-                  <b>{shekel(r.fairTotal)}</b>
-                  {r.fairTotal > best && <small>+{(((r.fairTotal / best) - 1) * 100).toFixed(1)}%</small>}
-                </span>
-              </summary>
-              <p className="muted">{r.store.address}. נמצאו {r.found} מתוך {c.items.length}. סך הפריטים שנמצאו: {shekel(r.total)}</p>
-              <table><tbody>
-                {c.items.map((it, k) => (
-                  <tr key={it.id} className={r.lines[k].price == null ? "miss" : ""}>
-                    <td>{it.text}{r.lines[k].label && <small>{r.lines[k].label}</small>}</td>
-                    <td>{r.lines[k].price == null ? "חסר" : shekel(r.lines[k].price!)}</td>
-                  </tr>
-                ))}
-              </tbody></table>
-            </details>
+      <ul className="split">
+        {c.split.stores.map((s) => (
+          <li key={s.store.key}>
+            <b>{s.store.name}</b> <span>{shekel(s.total)}</span>
+            <small>{s.items.map((x) => x.item.text).join(", ")}</small>
           </li>
         ))}
       </ul>
-
-      {c.split.length > 1 && (
-        <>
-          <h3>פיצול הסל</h3>
-          <p className="muted">הזול ביותר לכל פריט, בחנויות המוצגות: {shekel(c.splitTotal)}
-            {c.winner && c.winnerFull && c.splitTotal < c.winner.total ? ` (חיסכון של ${shekel(c.winner.total - c.splitTotal)} לעומת חנות אחת)` : ""}</p>
-          <ul className="split">
-            {c.split.map((s) => (
-              <li key={s.store.key}>
-                <b>{s.store.name}</b> <span>{shekel(s.total)}</span>
-                <small>{s.items.map((x) => x.item.text).join(", ")}</small>
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
-      {c.skippedItems.length > 0 && <p className="muted">לא נמצאו באף חנות: {c.skippedItems.map((i) => i.text).join(", ")}</p>}
-      {c.unpriced.length > 0 && <p className="muted">ללא מחיר (טקסט חופשי): {c.unpriced.map((i) => i.text).join(", ")}</p>}
-
-      <h3>אילו חנויות להציג</h3>
-      <div className="chips">
-        {c.results.map((r) => (
-          <button key={r.store.key} className={c.visible.includes(r.index) ? "on" : ""} onClick={() => toggle(r.index)}>
-            {r.store.name} · {Math.round(r.coverage * 100)}%
-          </button>
-        ))}
-      </div>
-      <p className="muted">האחוז הוא כמה מהרשימה החנות מוכרת. כברירת מחדל מוצגות חנויות עם 70% ומעלה.</p>
+      {c.split.uncovered.length > 0 && <p className="muted center">לא נכללו בפיצול: {c.split.uncovered.map((i) => i.text).join(", ")}</p>}
+      {c.notFound.length > 0 && <p className="muted center">לא נמצאו באף חנות: {c.notFound.map((i) => i.text).join(", ")}</p>}
+      {c.unpriced.length > 0 && <p className="muted center">ללא מחיר (טקסט חופשי): {c.unpriced.map((i) => i.text).join(", ")}</p>}
 
       <p className="foot">
         מחירי מדף בלבד, בלי מבצעים ומועדון. מחירים מתאריך {data.meta.date}.
         {data.meta.missing.length > 0 && ` לא פרסמו היום: ${data.meta.missing.map((m) => m.name).join(", ")}.`}
         {" "}ההתאמה לפריטים לפי משקל היא קירוב, ובדקו את שם המוצר שנבחר.
       </p>
+    </section>
+  );
+}
+
+interface SavedProps {
+  lists: SavedList[];
+  hasItems: boolean;
+  onSave: (name: string) => Promise<string>;
+  onLoad: (l: SavedList) => string;
+  onDelete: (id: string) => Promise<void>;
+}
+
+function SavedView({ lists, hasItems, onSave, onLoad, onDelete }: SavedProps) {
+  const [name, setName] = useState("");
+  const [msg, setMsg] = useState("");
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const n = name.trim();
+    if (!n) return;
+    if (lists.some((l) => l.name === n) && !window.confirm(`כבר קיימת רשימה בשם "${n}". להחליף אותה?`)) return;
+    setMsg(await onSave(n));
+    setName("");
+  };
+  return (
+    <section aria-label="רשימות שמורות">
+      <h2 className="h">שמירת הרשימה הנוכחית</h2>
+      <form className="add" onSubmit={submit}>
+        <label className="sr" htmlFor="listname">שם הרשימה</label>
+        <input id="listname" value={name} onChange={(e) => setName(e.target.value)} placeholder="למשל: קניות חודשיות" autoComplete="off" />
+        <button type="submit" disabled={!name.trim() || !hasItems}>שמירה</button>
+      </form>
+      <div className="chips" aria-label="שמות מוצעים">
+        {["השלמות שוטף", "קניות חודשיות", "שבת וחג"].map((n) => (
+          <button key={n} type="button" onClick={() => setName(n)}>{n}</button>
+        ))}
+      </div>
+      {!hasItems && <p className="muted center">הרשימה הנוכחית ריקה, אין מה לשמור.</p>}
+      <p className="muted center" role="status" aria-live="polite">{msg}</p>
+
+      <h2 className="h">הרשימות השמורות ({lists.length})</h2>
+      {!lists.length && <p className="muted center">עדיין אין רשימות שמורות.</p>}
+      <ul className="saved">
+        {lists.map((l) => (
+          <li key={l.id}>
+            <details>
+              <summary><b>{l.name}</b><small>{l.items.length} פריטים</small></summary>
+              <ul className="plain">{l.items.map((it, k) => <li key={k}>{it.text}{it.qty !== 1 ? ` × ${it.qty}` : ""}</li>)}</ul>
+            </details>
+            <div className="acts">
+              <button className="primary" onClick={() => setMsg(onLoad(l))}>הוספה לרשימה</button>
+              <button onClick={() => { if (window.confirm(`למחוק את "${l.name}"?`)) onDelete(l.id); }}>מחיקה</button>
+            </div>
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }

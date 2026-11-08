@@ -4,6 +4,7 @@ const SB_URL = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.replac
 const SB_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 const CODE_KEY = "super.code";
 const LOCAL_KEY = "super.list";
+const LISTS_KEY = "super.lists";
 
 export const remoteConfigured = Boolean(SB_URL && SB_KEY);
 
@@ -31,11 +32,26 @@ export const clearCode = () => store.del(CODE_KEY);
 export class BadCode extends Error {}
 export class Locked extends Error {}
 
+export const uid = () =>
+  typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+        const r = (Math.random() * 16) | 0;
+        return (c === "x" ? r : (r & 3) | 8).toString(16);
+      });
+
+/** An item as stored inside a saved list: no id and never "in the cart". */
+export type SavedItem = Omit<Item, "id" | "checked">;
+export interface SavedList { id: string; name: string; items: SavedItem[] }
+
 export interface Backend {
   shared: boolean;
   list(): Promise<Item[]>;
   upsert(item: Item): Promise<void>;
   remove(id: string): Promise<void>;
+  lists(): Promise<SavedList[]>;
+  saveList(name: string, items: SavedItem[]): Promise<void>;
+  deleteList(id: string): Promise<void>;
 }
 
 async function rpc<T>(fn: string, args: Record<string, unknown>): Promise<T> {
@@ -50,6 +66,7 @@ async function rpc<T>(fn: string, args: Record<string, unknown>): Promise<T> {
   const err = body && typeof body === "object" && !Array.isArray(body) ? (body as { error?: string }).error : undefined;
   if (err === "bad_code") throw new BadCode();
   if (err === "locked") throw new Locked();
+  if (err) throw new Error(`${fn}: ${err}`);
   return body as T;
 }
 
@@ -59,6 +76,9 @@ export function remoteBackend(code: string): Backend {
     list: async () => (await rpc<Item[]>("list_get", { p_code: code })) ?? [],
     upsert: async (item) => void (await rpc("item_upsert", { p_code: code, p_item: item })),
     remove: async (id) => void (await rpc("item_delete", { p_code: code, p_id: id })),
+    lists: async () => (await rpc<SavedList[]>("saved_lists_get", { p_code: code })) ?? [],
+    saveList: async (name, items) => void (await rpc("saved_list_save", { p_code: code, p_name: name, p_items: items })),
+    deleteList: async (id) => void (await rpc("saved_list_delete", { p_code: code, p_id: id })),
   };
 }
 
@@ -66,11 +86,20 @@ export function remoteBackend(code: string): Backend {
 export function localBackend(): Backend {
   const read = (): Item[] => { try { return JSON.parse(store.get(LOCAL_KEY) ?? "[]"); } catch { return []; } };
   const write = (l: Item[]) => store.set(LOCAL_KEY, JSON.stringify(l));
+  const readLists = (): SavedList[] => { try { return JSON.parse(store.get(LISTS_KEY) ?? "[]"); } catch { return []; } };
+  const writeLists = (l: SavedList[]) => store.set(LISTS_KEY, JSON.stringify(l));
   return {
     shared: false,
     list: async () => read(),
     upsert: async (item) => { const l = read().filter((i) => i.id !== item.id); l.push(item); write(l); },
     remove: async (id) => write(read().filter((i) => i.id !== id)),
+    lists: async () => readLists(),
+    saveList: async (name, items) => {
+      const all = readLists();
+      const old = all.find((l) => l.name === name);
+      writeLists([...all.filter((l) => l.name !== name), { id: old?.id ?? uid(), name, items }]);
+    },
+    deleteList: async (id) => writeLists(readLists().filter((l) => l.id !== id)),
   };
 }
 
