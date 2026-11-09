@@ -161,3 +161,8 @@ footer { margin-top: 20px; text-align: center; }
 .totals .ref, .totals small { grid-column: 1 / -1; }
 .totals .ref { display: flex; align-items: center; gap: 8px; text-align: start; font-size: .9rem; }
 .totals .ref select { flex: 1; min-width: 0; min-height: 44px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--fg); padding: 0 8px; }
+
+.tools .wideb { grid-column: 1 / -1; margin-top: 0; }
+.picker textarea { width: 100%; min-height: 120px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--fg); font: .95rem/1.5 ui-monospace, Consolas, monospace; resize: vertical; }
+.card.miss { border-color: var(--warn); }
+.card .qty { flex: none; font-weight: 700; color: var(--brand); }

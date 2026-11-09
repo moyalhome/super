@@ -45,6 +45,30 @@ DROP_WORDS = {"בעמ", "תעשיות", "תעשיית", "תעשיה", "מזון"
               "ישראל", "סחר", "מסחר", "יבוא", "וניהול"}
 
 
+def _tokens(s):
+    """Hebrew words, Latin words and numbers separately, so "סימפוניה5%בצל" and "סימפוניה 5% בצל" compare equal."""
+    return set(re.findall(r"[א-ת]+|[a-z]+|\d+", re.sub(r"[\"'׳״`]", "", s).lower()))
+
+
+def pick_name(cands):
+    """Stores name the same barcode differently (some truncate, one may mislabel). Ignore names that look like no one
+    else's, then take the fullest; "the longest of all" once picked a wrong flavour from a single store."""
+    uniq = list(dict.fromkeys(cands))
+    if len(uniq) == 1:
+        return uniq[0]
+    toks = {n: _tokens(n) for n in uniq}
+
+    def sim(a, b):
+        u = toks[a] | toks[b]
+        return len(toks[a] & toks[b]) / len(u) if u else 0.0
+
+    score = {n: sum(sim(n, m) for m in cands) for n in uniq}
+    # drop outliers (a name no other store resembles), then take the fullest of the rest: many stores truncate names
+    best = max(score.values())
+    kept = [n for n in uniq if score[n] >= 0.5 * best]
+    return max(kept, key=lambda n: (len(n), score[n]))
+
+
 def clean_brand(raw):
     """'אסם תעשיות מזון בע"מ' and 'אסם השקעות בע"מ' both become 'אסם'; placeholders become ''."""
     s = re.sub(r"[\"'׳״`]", "", raw or "").strip()
@@ -83,6 +107,7 @@ def main():
 
     prices, names, weighted = {}, {}, []
     votes = collections.defaultdict(collections.Counter)  # barcode -> manufacturer -> number of stores naming it
+    name_votes = collections.defaultdict(list)             # barcode -> the name each store uses
     for i, rows in enumerate(tables):
         w = []
         for r in rows:
@@ -91,12 +116,12 @@ def main():
                 w.append([r["name"], cents])
             elif is_barcode(r["code"]):
                 prices.setdefault(r["code"], [None] * len(stores))[i] = cents
-                if len(r["name"]) > len(names.get(r["code"], "")):
-                    names[r["code"]] = r["name"]
+                name_votes[r["code"]].append(r["name"])
                 b = clean_brand(r["mfr"])
                 if b:
                     votes[r["code"]][b] += 1
         weighted.append(w)
+    names = {c: pick_name(v) for c, v in name_votes.items()}
     # the brand most stores agree on; on a tie the longer (more specific) name
     brands = {c: max(v.items(), key=lambda kv: (kv[1], len(kv[0])))[0] for c, v in votes.items()}
 

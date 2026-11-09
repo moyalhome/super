@@ -8,6 +8,7 @@ import { DEFAULT_DEPTS, OTHER, deptFor, deptKey, deptOptions, deptOrder, groupBy
 import { buildIndex, findBarcode, search, type Suggestion } from "./search";
 import Scanner, { type ScanResult } from "./Scanner";
 import Picker from "./Picker";
+import BulkAdd from "./BulkAdd";
 import { ProductImg } from "./images";
 import type { Data, HistoryEntry, Item } from "./types";
 
@@ -252,6 +253,7 @@ function ListView({ items, data, name, kv, history, toggleChecked, setDept, add,
   const [editing, setEditing] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
   const [browsing, setBrowsing] = useState(false);
+  const [bulk, setBulk] = useState(false);
   // prices in the list are shown for one store: the cheapest one that has the whole list, unless the user picks another
   const [refKey, setRefKey] = useState<string>(() => { try { return localStorage.getItem("super.ref") ?? "auto"; } catch { return "auto"; } });
   const priceCtx = useMemo(() => {
@@ -302,6 +304,17 @@ function ListView({ items, data, name, kv, history, toggleChecked, setDept, add,
     }
     add({ ...base, id: uid(), text: kw, kind: "weighted", keyword: kw });
     return `נוסף: ${kw}`;
+  };
+  const addMany = (entries: { code: string; qty: number }[]): string => {
+    let added = 0, bumped = 0;
+    for (const { code, qty } of entries) {
+      const text = data?.names[code];
+      if (!text) continue;
+      const ex = items.find((i) => i.kind === "barcode" && i.barcode === code);
+      if (ex) { update({ ...ex, checked: false, checkedBy: undefined, qty: ex.checked ? qty : ex.qty + qty }); bumped++; }
+      else { add({ ...base, id: uid(), text, kind: "barcode", barcode: code, qty }); added++; }
+    }
+    return `נוספו ${added} מוצרים` + (bumped ? `, ובעוד ${bumped} הכמות עודכנה` : "");
   };
   const sameAsHistory = (i: Item, h: HistoryEntry) =>
     i.kind === h.kind && (h.kind === "barcode" ? i.barcode === h.barcode : h.kind === "weighted" ? i.keyword === h.keyword : i.text === h.text);
@@ -398,7 +411,9 @@ function ListView({ items, data, name, kv, history, toggleChecked, setDept, add,
       <div className="tools">
         <button type="button" className="scan" onClick={() => setScanning(true)}>📷 סריקת ברקוד</button>
         <button type="button" className="scan" onClick={() => setBrowsing(true)} disabled={!index}>🔎 עיון במוצרים</button>
+        <button type="button" className="scan wideb" onClick={() => setBulk(true)} disabled={!index}>📋 הדבקת כמה ברקודים (אפשר מקבלה)</button>
       </div>
+      {bulk && data && index && <BulkAdd index={index} names={data.names} onAdd={addMany} onClose={() => setBulk(false)} />}
       {scanning && <Scanner onCode={handleCode} onUnknownNamed={addNamed} onClose={() => setScanning(false)} />}
       {browsing && data && index && (
         <Picker data={data} index={index} items={items} order={order} kv={kv} history={history} initialQuery={q}

@@ -25,6 +25,18 @@ export function findBarcode(index: Index, raw: string): string | null {
   return digits ? index.byCode.get(strip(digits)) ?? null : null;
 }
 
+/**
+ * Like findBarcode, and also understands the short codes that stores print on receipts: Israeli barcodes that start
+ * with 729000 are often printed without that prefix ("3029792" is "7290003029792").
+ */
+export function resolveCode(index: Index, raw: string): string | null {
+  const digits = raw.replace(/\D/g, "");
+  if (!digits) return null;
+  const direct = index.byCode.get(strip(digits));
+  if (direct) return direct;
+  return digits.length <= 7 ? index.byCode.get(strip("729000" + digits.padStart(7, "0"))) ?? null : null;
+}
+
 const TWO_WORDS = new Set(["תפוח", "חזה", "פילה", "שמן", "בצל", "פלפל", "כרוב"]);
 
 export function buildIndex(data: Data): Index {
